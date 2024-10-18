@@ -47,7 +47,6 @@ func initDB(db *sql.DB) error {
 	}
 
 	if exists {
-		log.Println("Migration already applied, skipping")
 		return nil
 	}
 

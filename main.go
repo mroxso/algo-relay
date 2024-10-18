@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"flag"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/fiatjaf/khatru"
 	"github.com/joho/godotenv"
@@ -39,9 +42,23 @@ var relays = []string{
 	"wss://wot.relay.vanderwarker.family",
 	"wss://wot.zacoos.com",
 }
+
 var db *sql.DB
+var art = `
+ █████╗ ██╗      ██████╗  ██████╗     ██████╗ ███████╗██╗      █████╗ ██╗   ██╗
+██╔══██╗██║     ██╔════╝ ██╔═══██╗    ██╔══██╗██╔════╝██║     ██╔══██╗╚██╗ ██╔╝
+███████║██║     ██║  ███╗██║   ██║    ██████╔╝█████╗  ██║     ███████║ ╚████╔╝ 
+██╔══██║██║     ██║   ██║██║   ██║    ██╔══██╗██╔══╝  ██║     ██╔══██║  ╚██╔╝  
+██║  ██║███████╗╚██████╔╝╚██████╔╝    ██║  ██║███████╗███████╗██║  ██║   ██║   
+╚═╝  ╚═╝╚══════╝ ╚═════╝  ╚═════╝     ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝   ╚═╝   
+	`
 
 func main() {
+	nostr.InfoLogger = log.New(io.Discard, "", 0)
+	green := "\033[32m"
+	reset := "\033[0m"
+	fmt.Println(green + art + reset)
+
 	importFlag := flag.Bool("import", false, "Run the importNotes function after initializing relays")
 	flag.Parse()
 	conn, err := getDBConnection()
@@ -58,12 +75,20 @@ func main() {
 		importNotes(nostr.KindTextNote)
 		importNotes(nostr.KindReaction)
 		importNotes(nostr.KindZap)
+		log.Println("📦 done importing notes. Please restart relay")
 		return
 	}
 
 	go subscribeAll()
 
 	relay := khatru.NewRelay()
+	relay.Info.Description = os.Getenv("RELAY_DESCRIPTION")
+	relay.Info.Name = os.Getenv("RELAY_NAME")
+	relay.Info.PubKey = os.Getenv("RELAY_PUBKEY")
+	relay.Info.Software = "https://github.com/bitvora/algo-relay"
+	relay.Info.Version = "0.1.0"
+	relay.Info.Icon = os.Getenv("RELAY_ICON")
+
 	relay.OnConnect = append(relay.OnConnect, func(ctx context.Context) {
 		khatru.RequestAuth(ctx)
 	})
@@ -93,7 +118,7 @@ func main() {
 
 			log.Println("Fetching user feed for", authenticatedUser)
 
-			events, err := repository.GetUserFeed(ctx, authenticatedUser, limit)
+			events, err := GetUserFeed(ctx, authenticatedUser, limit)
 			if err != nil {
 				log.Println("Error fetching most reacted posts:", err)
 				return
@@ -107,6 +132,7 @@ func main() {
 		return ch, nil
 	})
 
+	log.Println("🚀 Relay started on port 3334")
 	err = http.ListenAndServe(":3334", relay)
 	if err != nil {
 		log.Fatal(err)

@@ -22,13 +22,13 @@ var (
 	decayRate                    = getWeightFloat64("DECAY_RATE")
 )
 
-func (r *NostrRepository) GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, error) {
-	authorFeed, err := r.GetUserFeedByAuthors(ctx, userID, limit/2)
+func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, error) {
+	authorFeed, err := repository.GetUserFeedByAuthors(ctx, userID, limit/2)
 	if err != nil {
 		return nil, err
 	}
 
-	viralFeed, err := r.GetViralPosts(ctx, limit/2)
+	viralFeed, err := repository.GetViralPosts(ctx, limit/2)
 	if err != nil {
 		return nil, err
 	}
