@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -24,17 +25,24 @@ func getDBConnection() (*sql.DB, error) {
 
 	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable", dbHost, dbUser, dbPassword, dbName, dbPort)
 
+	// Open the database connection
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("error opening db: %v", err)
 	}
 
+	// Set connection pool settings
+	db.SetMaxOpenConns(20)           // Maximum number of open connections to the database
+	db.SetMaxIdleConns(10)           // Maximum number of idle connections in the pool
+	db.SetConnMaxLifetime(time.Hour) // Maximum lifetime of a connection
+
+	// Ping the database to ensure the connection is successful
 	err = db.Ping()
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to the db: %v", err)
 	}
 
-	initDB(db)
+	initDB(db) // Call your database initialization logic
 
 	return db, nil
 }
