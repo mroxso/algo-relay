@@ -127,9 +127,9 @@ func main() {
 
 	relay.RejectFilter = append(relay.RejectFilter,
 		policies.FilterIPRateLimiter(
-			3,
-			time.Minute*1,
-			3,
+			1,
+			time.Second*10,
+			1,
 		),
 	)
 
