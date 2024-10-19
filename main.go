@@ -125,6 +125,14 @@ func main() {
 		),
 	)
 
+	relay.RejectFilter = append(relay.RejectFilter,
+		policies.FilterIPRateLimiter(
+			3,
+			time.Minute*1,
+			3,
+		),
+	)
+
 	relay.OnConnect = append(relay.OnConnect, func(ctx context.Context) {
 		khatru.RequestAuth(ctx)
 	})
