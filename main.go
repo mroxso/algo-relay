@@ -123,6 +123,11 @@ func main() {
 		if authenticatedUser == "" {
 			return true, "auth-required: this query requires you to be authenticated"
 		}
+
+		if len(filter.Authors) > 0 {
+			return true, "this relay is only for algorithmic feeds"
+		}
+
 		return false, ""
 	})
 	relay.RejectEvent = append(relay.RejectEvent, func(ctx context.Context, event *nostr.Event) (bool, string) {
