@@ -51,7 +51,6 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 
 	var result []nostr.Event
 	for i, feedPost := range filteredFeed {
-		log.Println("post", feedPost.Event.ID, "score", feedPost.Score)
 		if i >= limit {
 			break
 		}
