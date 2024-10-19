@@ -167,12 +167,14 @@ func main() {
 }
 
 func subscribeAll() {
+	now := nostr.Now()
 	filters := nostr.Filters{{
 		Kinds: []int{
 			nostr.KindTextNote,
 			nostr.KindReaction,
 			nostr.KindZap,
 		},
+		Since: &now,
 	}}
 
 	for ev := range pool.SubMany(ctx, relays, filters) {
