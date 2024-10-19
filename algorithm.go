@@ -51,6 +51,7 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 
 	var result []nostr.Event
 	for i, feedPost := range filteredFeed {
+
 		if i >= limit {
 			break
 		}
@@ -104,6 +105,10 @@ func calculateRecencyFactor(createdAt time.Time) float64 {
 func getWeightFloat64(envKey string) float64 {
 	weight := os.Getenv(envKey)
 
+	// Log the environment key and value for debugging purposes
+	log.Printf("Fetching environment variable for %s: %s", envKey, weight)
+
+	// Trim any extra spaces from the environment variable
 	weight = strings.TrimSpace(weight)
 
 	if weight == "" {
