@@ -142,8 +142,6 @@ func main() {
 				limit = 50
 			}
 
-			log.Println("Fetching user feed for", authenticatedUser)
-
 			events, err := GetUserFeed(ctx, authenticatedUser, limit)
 			if err != nil {
 				log.Println("Error fetching most reacted posts:", err)

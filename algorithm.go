@@ -42,6 +42,8 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 		return createFeedResult(cached.Feed, limit), nil
 	}
 
+	log.Println("no cache found, fetching feed for user:", userID)
+
 	authorFeed, err := repository.GetUserFeedByAuthors(ctx, userID, limit/2)
 	if err != nil {
 		return nil, err
