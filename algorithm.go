@@ -30,6 +30,8 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 		return nil, err
 	}
 
+	log.Println("found", len(authorFeed), "posts from authors")
+
 	viralFeed, err := repository.GetViralPosts(ctx, limit/2)
 	if err != nil {
 		return nil, err

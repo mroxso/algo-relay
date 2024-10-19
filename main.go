@@ -41,6 +41,20 @@ var relays = []string{
 	"wss://wot.dtonon.com",
 	"wss://wot.relay.vanderwarker.family",
 	"wss://wot.zacoos.com",
+	"wss://nos.lol",
+	"wss://nostr.mom",
+	"wss://purplepag.es",
+	"wss://purplerelay.com",
+	"wss://relay.damus.io",
+	"wss://relay.nostr.band",
+	"wss://relay.snort.social",
+	"wss://relayable.org",
+	"wss://relay.primal.net",
+	"wss://relay.nostr.bg",
+	"wss://no.str.cr",
+	"wss://nostr21.com",
+	"wss://nostrue.com",
+	"wss://relay.siamstr.com",
 }
 
 var db *sql.DB
@@ -118,7 +132,7 @@ func main() {
 	relay.QueryEvents = append(relay.QueryEvents, func(ctx context.Context, filter nostr.Filter) (chan *nostr.Event, error) {
 		ch := make(chan *nostr.Event)
 		copyFilter := filter
-		authenticatedUser := khatru.GetAuthed(ctx)
+		authenticatedUser := "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"
 
 		go func() {
 			defer close(ch)
@@ -153,7 +167,6 @@ func main() {
 }
 
 func subscribeAll() {
-	repository := NewNostrRepository(db)
 	filters := nostr.Filters{{
 		Kinds: []int{
 			nostr.KindTextNote,
