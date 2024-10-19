@@ -9,8 +9,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/fiatjaf/khatru"
+	"github.com/fiatjaf/khatru/policies"
 	"github.com/joho/godotenv"
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -114,6 +116,14 @@ func main() {
 	relay.Info.Software = "https://github.com/bitvora/algo-relay"
 	relay.Info.Version = "0.1.0"
 	relay.Info.Icon = os.Getenv("RELAY_ICON")
+
+	relay.RejectConnection = append(relay.RejectConnection,
+		policies.ConnectionRateLimiter(
+			3,
+			time.Minute*1,
+			3,
+		),
+	)
 
 	relay.OnConnect = append(relay.OnConnect, func(ctx context.Context) {
 		khatru.RequestAuth(ctx)
