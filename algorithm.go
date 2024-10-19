@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -24,7 +25,23 @@ var (
 	decayRate                    float64
 )
 
+type CachedFeed struct {
+	Feed      []FeedPost
+	Timestamp time.Time
+}
+
+var userFeedCache sync.Map
+
+const feedCacheDuration = 5 * time.Minute
+
 func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, error) {
+	now := time.Now()
+
+	if cached, ok := getCachedUserFeed(userID); ok && now.Sub(cached.Timestamp) < feedCacheDuration {
+		log.Println("Returning cached feed for user:", userID)
+		return createFeedResult(cached.Feed, limit), nil
+	}
+
 	authorFeed, err := repository.GetUserFeedByAuthors(ctx, userID, limit/2)
 	if err != nil {
 		return nil, err
@@ -39,7 +56,6 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 
 	combinedFeed := append(authorFeed, viralFeed...)
 
-	// strip out the user's own posts
 	filteredFeed := make([]FeedPost, 0, len(combinedFeed))
 	for _, feedPost := range combinedFeed {
 		if feedPost.Event.PubKey != userID {
@@ -51,6 +67,22 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 		return filteredFeed[i].Score > filteredFeed[j].Score
 	})
 
+	userFeedCache.Store(userID, CachedFeed{
+		Feed:      filteredFeed,
+		Timestamp: now,
+	})
+
+	return createFeedResult(filteredFeed, limit), nil
+}
+
+func getCachedUserFeed(userID string) (CachedFeed, bool) {
+	if cached, ok := userFeedCache.Load(userID); ok {
+		return cached.(CachedFeed), true
+	}
+	return CachedFeed{}, false
+}
+
+func createFeedResult(filteredFeed []FeedPost, limit int) []nostr.Event {
 	var result []nostr.Event
 	for i, feedPost := range filteredFeed {
 		if i >= limit {
@@ -58,8 +90,7 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 		}
 		result = append(result, feedPost.Event)
 	}
-
-	return result, nil
+	return result
 }
 
 func (r *NostrRepository) GetUserFeedByAuthors(ctx context.Context, userID string, limit int) ([]FeedPost, error) {
