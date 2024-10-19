@@ -2,24 +2,26 @@ package main
 
 import (
 	"context"
+	"log"
 	"math"
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 )
 
 var (
-	weightInteractionsWithAuthor = getWeightFloat64("WEIGHT_INTERACTIONS_WITH_AUTHOR")
-	weightCommentsGlobal         = getWeightFloat64("WEIGHT_COMMENTS_GLOBAL")
-	weightReactionsGlobal        = getWeightFloat64("WEIGHT_REACTIONS_GLOBAL")
-	weightZapsGlobal             = getWeightFloat64("WEIGHT_ZAPS_GLOBAL")
-	weightRecency                = getWeightFloat64("WEIGHT_RECENCY")
-	viralThreshold               = getWeightFloat64("VIRAL_THRESHOLD")
-	viralPostDampening           = getWeightFloat64("VIRAL_POST_DAMPENING")
-	decayRate                    = getWeightFloat64("DECAY_RATE")
+	weightInteractionsWithAuthor float64
+	weightCommentsGlobal         float64
+	weightReactionsGlobal        float64
+	weightZapsGlobal             float64
+	weightRecency                float64
+	viralThreshold               float64
+	viralPostDampening           float64
+	decayRate                    float64
 )
 
 func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, error) {
@@ -101,12 +103,19 @@ func calculateRecencyFactor(createdAt time.Time) float64 {
 
 func getWeightFloat64(envKey string) float64 {
 	weight := os.Getenv(envKey)
+
+	weight = strings.TrimSpace(weight)
+
 	if weight == "" {
+		log.Printf("Environment variable %s not set, defaulting to 1", envKey)
 		return 1
 	}
 
+	// Parse the float value
 	w, err := strconv.ParseFloat(weight, 64)
 	if err != nil {
+		// Log the error and return default
+		log.Printf("Error parsing float for %s: %v, defaulting to 1", envKey, err)
 		return 1
 	}
 

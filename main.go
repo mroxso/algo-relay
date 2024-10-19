@@ -54,6 +54,10 @@ var art = `
 	`
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Error loading .env file")
+	}
 	nostr.InfoLogger = log.New(io.Discard, "", 0)
 	green := "\033[32m"
 	reset := "\033[0m"
@@ -69,6 +73,14 @@ func main() {
 	defer conn.Close()
 	db = conn
 	repository = NewNostrRepository(db)
+	weightInteractionsWithAuthor = getWeightFloat64("WEIGHT_INTERACTIONS_WITH_AUTHOR")
+	weightCommentsGlobal = getWeightFloat64("WEIGHT_COMMENTS_GLOBAL")
+	weightReactionsGlobal = getWeightFloat64("WEIGHT_REACTIONS_GLOBAL")
+	weightZapsGlobal = getWeightFloat64("WEIGHT_ZAPS_GLOBAL")
+	weightRecency = getWeightFloat64("WEIGHT_RECENCY")
+	viralThreshold = getWeightFloat64("VIRAL_THRESHOLD")
+	viralPostDampening = getWeightFloat64("VIRAL_POST_DAMPENING")
+	decayRate = getWeightFloat64("DECAY_RATE")
 
 	if *importFlag {
 		log.Println("📦 importing notes")
