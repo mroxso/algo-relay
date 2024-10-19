@@ -132,7 +132,7 @@ func main() {
 	relay.QueryEvents = append(relay.QueryEvents, func(ctx context.Context, filter nostr.Filter) (chan *nostr.Event, error) {
 		ch := make(chan *nostr.Event)
 		copyFilter := filter
-		authenticatedUser := "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"
+		authenticatedUser := khatru.GetAuthed(ctx)
 
 		go func() {
 			defer close(ch)
