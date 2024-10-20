@@ -49,8 +49,6 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 		return nil, err
 	}
 
-	log.Println("found", len(authorFeed), "posts from authors")
-
 	viralFeed, err := repository.GetViralPosts(ctx, limit/2)
 	if err != nil {
 		return nil, err
@@ -80,14 +78,6 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 	sort.Slice(filteredFeed, func(i, j int) bool {
 		return filteredFeed[i].Score > filteredFeed[j].Score
 	})
-
-	// Log the top 100 posts by score
-	for i, feedPost := range filteredFeed {
-		log.Printf("Post %d: %s, score: %f", i, feedPost.Event.ID, feedPost.Score)
-		if i >= 100 {
-			break
-		}
-	}
 
 	// Cache the filtered feed
 	userFeedCache.Store(userID, CachedFeed{
