@@ -26,7 +26,13 @@ type EventWithMeta struct {
 	GlobalCommentsCount  int
 	GlobalReactionsCount int
 	GlobalZapsCount      int
+	InteractionCount     int
 	CreatedAt            time.Time
+}
+
+type AuthorInteraction struct {
+	AuthorID         string
+	InteractionCount int
 }
 
 func NewNostrRepository(db *sql.DB) *NostrRepository {
@@ -171,7 +177,7 @@ func decodeBolt11Invoice(bolt11 string) (int64, error) {
 	return satsInt64, nil
 }
 
-func (r *NostrRepository) fetchTopInteractedAuthors(userID string, limit int) ([]string, error) {
+func (r *NostrRepository) fetchTopInteractedAuthors(userID string) ([]AuthorInteraction, error) {
 	query := `
 		SELECT author_id, COUNT(*) AS interaction_count
 		FROM posts p
@@ -181,40 +187,45 @@ func (r *NostrRepository) fetchTopInteractedAuthors(userID string, limit int) ([
 		WHERE z.zapper_id = $1 OR r.reactor_id = $1 OR c.commenter_id = $1
 		GROUP BY author_id
 		ORDER BY interaction_count DESC
-		LIMIT $2
 	`
-	rows, err := r.db.QueryContext(context.Background(), query, userID, limit)
+	rows, err := r.db.QueryContext(context.Background(), query, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var authors []string
+	var authors []AuthorInteraction
 	for rows.Next() {
 		var authorID string
 		var interactionCount int
 		if err := rows.Scan(&authorID, &interactionCount); err != nil {
 			return nil, err
 		}
-		authors = append(authors, authorID)
+		authors = append(authors, AuthorInteraction{
+			AuthorID:         authorID,
+			InteractionCount: interactionCount,
+		})
 	}
 	return authors, nil
 }
-
 func (r *NostrRepository) GetViralPosts(ctx context.Context, limit int) ([]FeedPost, error) {
+	// Calculate the date 3 days ago
+	threeDaysAgo := time.Now().AddDate(0, 0, -3)
+
 	query := `
     SELECT p.raw_json, COUNT(c.id) AS comment_count, COUNT(r.id) AS reaction_count, COUNT(z.id) AS zap_count
     FROM posts p
     LEFT JOIN comments c ON p.id = c.post_id
     LEFT JOIN reactions r ON p.id = r.post_id
     LEFT JOIN zaps z ON p.id = z.post_id
+    WHERE p.created_at >= $3  -- Filter to only include posts from the last 3 days
     GROUP BY p.id
     HAVING COUNT(c.id) + COUNT(r.id) + COUNT(z.id) >= $1
     ORDER BY COUNT(c.id) + COUNT(r.id) + COUNT(z.id) DESC
     LIMIT $2;
 `
 
-	rows, err := r.db.QueryContext(context.Background(), query, viralThreshold, limit)
+	rows, err := r.db.QueryContext(context.Background(), query, viralThreshold, limit, threeDaysAgo)
 	if err != nil {
 		return nil, err
 	}
@@ -250,19 +261,49 @@ func (r *NostrRepository) GetViralPosts(ctx context.Context, limit int) ([]FeedP
 	return viralPosts, nil
 }
 
-func (r *NostrRepository) fetchPostsFromAuthors(authors []string) ([]EventWithMeta, error) {
+func (r *NostrRepository) fetchPostsFromAuthors(authorInteractions []AuthorInteraction) ([]EventWithMeta, error) {
+	// Extract author IDs and interaction counts
+	authorIDs := make([]string, 0, len(authorInteractions))
+	interactionCounts := make([]int, 0, len(authorInteractions))
+
+	for _, authorInteraction := range authorInteractions {
+		// Only include authors with an interaction count >= 5
+		if authorInteraction.InteractionCount >= 5 {
+			authorIDs = append(authorIDs, authorInteraction.AuthorID)
+			interactionCounts = append(interactionCounts, authorInteraction.InteractionCount)
+		}
+	}
+
+	// If no authors meet the interaction count threshold, return early
+	if len(authorIDs) == 0 {
+		return nil, nil
+	}
+
+	// Get the cutoff date for posts older than 1 week
+	oneWeekAgo := time.Now().AddDate(0, 0, -7)
+
 	query := `
-		SELECT p.raw_json, COUNT(c.id) AS comment_count, COUNT(r.id) AS reaction_count, COUNT(z.id) AS zap_count
+		WITH author_interactions AS (
+			SELECT unnest($2::text[]) AS author_id, unnest($3::int[]) AS interaction_count
+		)
+		SELECT p.raw_json, 
+			   COUNT(DISTINCT c.id) AS comment_count, 
+			   COUNT(DISTINCT r.id) AS reaction_count, 
+			   COUNT(DISTINCT z.id) AS zap_count, 
+			   ai.interaction_count
 		FROM posts p
 		LEFT JOIN comments c ON p.id = c.post_id
 		LEFT JOIN reactions r ON p.id = r.post_id
 		LEFT JOIN zaps z ON p.id = z.post_id
+		JOIN author_interactions ai ON p.author_id = ai.author_id
 		WHERE p.author_id = ANY($1)
-		GROUP BY p.id
+		AND ai.interaction_count >= 5  -- Filter by interaction count
+		AND p.created_at >= $4         -- Filter posts created within the last week
+		GROUP BY p.id, ai.interaction_count
 		ORDER BY p.created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(context.Background(), query, pq.Array(authors))
+	rows, err := r.db.QueryContext(context.Background(), query, pq.Array(authorIDs), pq.Array(authorIDs), pq.Array(interactionCounts), oneWeekAgo)
 	if err != nil {
 		return nil, err
 	}
@@ -271,9 +312,9 @@ func (r *NostrRepository) fetchPostsFromAuthors(authors []string) ([]EventWithMe
 	var posts []EventWithMeta
 	for rows.Next() {
 		var rawJSON string
-		var commentCount, reactionCount, zapCount int
+		var commentCount, reactionCount, zapCount, interactionCount int
 
-		if err := rows.Scan(&rawJSON, &commentCount, &reactionCount, &zapCount); err != nil {
+		if err := rows.Scan(&rawJSON, &commentCount, &reactionCount, &zapCount, &interactionCount); err != nil {
 			return nil, err
 		}
 
@@ -288,6 +329,7 @@ func (r *NostrRepository) fetchPostsFromAuthors(authors []string) ([]EventWithMe
 			GlobalCommentsCount:  commentCount,
 			GlobalReactionsCount: reactionCount,
 			GlobalZapsCount:      zapCount,
+			InteractionCount:     interactionCount,
 			CreatedAt:            event.CreatedAt.Time(),
 		})
 	}

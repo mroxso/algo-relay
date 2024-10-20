@@ -58,17 +58,38 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 
 	combinedFeed := append(authorFeed, viralFeed...)
 
+	// Track the number of posts per author
+	authorPostCount := make(map[string]int)
+
 	filteredFeed := make([]FeedPost, 0, len(combinedFeed))
 	for _, feedPost := range combinedFeed {
-		if feedPost.Event.PubKey != userID {
+		authorID := feedPost.Event.PubKey
+		// Skip the user's own posts
+		if authorID == userID {
+			continue
+		}
+
+		// Allow up to 1 posts per author
+		if authorPostCount[authorID] < 1 {
 			filteredFeed = append(filteredFeed, feedPost)
+			authorPostCount[authorID]++
 		}
 	}
 
+	// Sort by score in descending order
 	sort.Slice(filteredFeed, func(i, j int) bool {
 		return filteredFeed[i].Score > filteredFeed[j].Score
 	})
 
+	// Log the top 100 posts by score
+	for i, feedPost := range filteredFeed {
+		log.Printf("Post %d: %s, score: %f", i, feedPost.Event.ID, feedPost.Score)
+		if i >= 100 {
+			break
+		}
+	}
+
+	// Cache the filtered feed
 	userFeedCache.Store(userID, CachedFeed{
 		Feed:      filteredFeed,
 		Timestamp: now,
@@ -86,29 +107,40 @@ func getCachedUserFeed(userID string) (CachedFeed, bool) {
 
 func createFeedResult(filteredFeed []FeedPost, limit int) []nostr.Event {
 	var result []nostr.Event
-	for i, feedPost := range filteredFeed {
-		if i >= limit {
+	authorAppearance := make(map[string]int)
+
+	for _, feedPost := range filteredFeed {
+		authorID := feedPost.Event.PubKey
+
+		if authorAppearance[authorID] > 0 && authorAppearance[authorID]%20 == 0 {
+			continue // Skip if the author has appeared in the last 20 posts
+		}
+
+		result = append(result, feedPost.Event)
+		authorAppearance[authorID]++
+		if len(result) >= limit {
 			break
 		}
-		result = append(result, feedPost.Event)
 	}
+
 	return result
 }
 
 func (r *NostrRepository) GetUserFeedByAuthors(ctx context.Context, userID string, limit int) ([]FeedPost, error) {
-	authors, err := r.fetchTopInteractedAuthors(userID, limit)
+	authorInteractions, err := r.fetchTopInteractedAuthors(userID)
 	if err != nil {
 		return nil, err
 	}
 
-	posts, err := r.fetchPostsFromAuthors(authors)
+	posts, err := r.fetchPostsFromAuthors(authorInteractions)
 	if err != nil {
 		return nil, err
 	}
 
 	var feedPosts []FeedPost
 	for _, post := range posts {
-		score := r.calculateAuthorPostScore(post)
+		interactionCount := getInteractionCountForAuthor(post.Event.PubKey, authorInteractions)
+		score := r.calculateAuthorPostScore(post, interactionCount)
 		feedPosts = append(feedPosts, FeedPost{Event: post.Event, Score: score})
 	}
 
@@ -119,21 +151,42 @@ func (r *NostrRepository) GetUserFeedByAuthors(ctx context.Context, userID strin
 	return feedPosts, nil
 }
 
-func (r *NostrRepository) calculateAuthorPostScore(event EventWithMeta) float64 {
+func getInteractionCountForAuthor(authorID string, interactions []AuthorInteraction) int {
+	for _, interaction := range interactions {
+		if interaction.AuthorID == authorID {
+			return interaction.InteractionCount
+		}
+	}
+	return 0
+}
+
+func (r *NostrRepository) calculateAuthorPostScore(event EventWithMeta, interactionCount int) float64 {
 	recencyFactor := calculateRecencyFactor(event.CreatedAt)
 
 	score := float64(event.GlobalCommentsCount)*weightCommentsGlobal +
 		float64(event.GlobalReactionsCount)*weightReactionsGlobal +
 		float64(event.GlobalZapsCount)*weightZapsGlobal +
 		recencyFactor*weightRecency +
-		float64(weightInteractionsWithAuthor)*weightInteractionsWithAuthor
+		float64(interactionCount)*weightInteractionsWithAuthor
 
 	return score
 }
 
 func calculateRecencyFactor(createdAt time.Time) float64 {
 	hoursSinceCreation := time.Since(createdAt).Hours()
-	return math.Exp(-decayRate * hoursSinceCreation)
+
+	// Use a scaling factor to normalize recency
+	scalingFactor := 100.0
+	recencyFactor := math.Exp(-decayRate*hoursSinceCreation) * scalingFactor
+
+	// Cap and floor the recency factor to avoid extreme values
+	if recencyFactor > 1.0 {
+		recencyFactor = 1.0
+	} else if recencyFactor < 0.001 {
+		recencyFactor = 0.001
+	}
+
+	return recencyFactor
 }
 
 func getWeightFloat64(envKey string) float64 {
