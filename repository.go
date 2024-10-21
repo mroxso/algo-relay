@@ -297,21 +297,35 @@ func (r *NostrRepository) fetchPostsFromAuthors(authorInteractions []AuthorInter
 		WITH author_interactions AS (
 			SELECT unnest($2::text[]) AS author_id, unnest($3::int[]) AS interaction_count
 		)
-		SELECT p.raw_json, 
-			   COUNT(DISTINCT c.id) AS comment_count, 
-			   COUNT(DISTINCT r.id) AS reaction_count, 
-			   COUNT(DISTINCT z.id) AS zap_count, 
-			   ai.interaction_count
+		SELECT p.raw_json,
+			COALESCE(comment_counts.comment_count, 0) AS comment_count,
+			COALESCE(reaction_counts.reaction_count, 0) AS reaction_count,
+			COALESCE(zap_counts.zap_count, 0) AS zap_count,
+			ai.interaction_count
 		FROM posts p
-		LEFT JOIN comments c ON p.id = c.post_id
-		LEFT JOIN reactions r ON p.id = r.post_id
-		LEFT JOIN zaps z ON p.id = z.post_id
 		JOIN author_interactions ai ON p.author_id = ai.author_id
+		LEFT JOIN (
+			SELECT post_id, COUNT(*) AS comment_count
+			FROM comments
+			WHERE created_at >= $4  -- Ensure the date filter applies to comments
+			GROUP BY post_id
+		) comment_counts ON p.id = comment_counts.post_id
+		LEFT JOIN (
+			SELECT post_id, COUNT(*) AS reaction_count
+			FROM reactions
+			WHERE created_at >= $4  -- Ensure the date filter applies to reactions
+			GROUP BY post_id
+		) reaction_counts ON p.id = reaction_counts.post_id
+		LEFT JOIN (
+			SELECT post_id, COUNT(*) AS zap_count
+			FROM zaps
+			WHERE created_at >= $4  -- Ensure the date filter applies to zaps
+			GROUP BY post_id
+		) zap_counts ON p.id = zap_counts.post_id
 		WHERE p.author_id = ANY($1)
 		AND ai.interaction_count >= 5  -- Filter by interaction count
 		AND p.created_at >= $4         -- Filter posts created within the last week
-		GROUP BY p.id, ai.interaction_count
-		ORDER BY p.created_at DESC
+		ORDER BY p.created_at DESC;
 	`
 
 	rows, err := r.db.QueryContext(context.Background(), query, pq.Array(authorIDs), pq.Array(authorIDs), pq.Array(interactionCounts), oneWeekAgo)
