@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math"
 	"os"
@@ -34,16 +35,47 @@ var userFeedCache sync.Map
 
 const feedCacheDuration = 5 * time.Minute
 
+var pendingRequests = make(map[string]chan struct{})
+var pendingRequestsMutex sync.Mutex
+
 func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, error) {
 	now := time.Now()
 
+	// Check if the feed is already cached
 	if cached, ok := getCachedUserFeed(userID); ok && now.Sub(cached.Timestamp) < feedCacheDuration {
 		log.Println("Returning cached feed for user:", userID)
 		return createFeedResult(cached.Feed, limit), nil
 	}
 
-	log.Println("no cache found, fetching feed for user:", userID)
+	// Check if feed generation is already pending
+	pendingRequestsMutex.Lock()
+	if pending, exists := pendingRequests[userID]; exists {
+		// Another request is generating the feed, so wait for it to complete
+		log.Println("Waiting for existing feed generation for user:", userID)
+		pendingRequestsMutex.Unlock()
+		<-pending // Wait until the channel is closed
+		// After waiting, use the cached feed
+		if cached, ok := getCachedUserFeed(userID); ok && now.Sub(cached.Timestamp) < feedCacheDuration {
+			return createFeedResult(cached.Feed, limit), nil
+		}
+		return nil, fmt.Errorf("feed generation failed after waiting for cache")
+	}
 
+	// Otherwise, set up a new pending request for this user
+	pending := make(chan struct{})
+	pendingRequests[userID] = pending
+	pendingRequestsMutex.Unlock()
+
+	// Generate the feed
+	defer func() {
+		pendingRequestsMutex.Lock()
+		close(pending) // Signal that feed generation is complete
+		delete(pendingRequests, userID)
+		pendingRequestsMutex.Unlock()
+	}()
+
+	// Proceed with feed generation
+	log.Println("No cache or pending request found, generating feed for user:", userID)
 	authorFeed, err := repository.GetUserFeedByAuthors(ctx, userID, limit/2)
 	if err != nil {
 		return nil, err
@@ -58,7 +90,6 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 
 	// Track the number of posts per author
 	authorPostCount := make(map[string]int)
-
 	filteredFeed := make([]FeedPost, 0, len(combinedFeed))
 	for _, feedPost := range combinedFeed {
 		authorID := feedPost.Event.PubKey
@@ -67,7 +98,7 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 			continue
 		}
 
-		// Allow up to 1 posts per author
+		// Allow up to 1 post per author
 		if authorPostCount[authorID] < 1 {
 			filteredFeed = append(filteredFeed, feedPost)
 			authorPostCount[authorID]++
