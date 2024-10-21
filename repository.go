@@ -185,6 +185,7 @@ func decodeBolt11Invoice(bolt11 string) (int64, error) {
 }
 
 func (r *NostrRepository) fetchTopInteractedAuthors(userID string) ([]AuthorInteraction, error) {
+	start := time.Now()
 	query := `
 		SELECT author_id, COUNT(*) AS interaction_count
 		FROM posts p
@@ -213,8 +214,10 @@ func (r *NostrRepository) fetchTopInteractedAuthors(userID string) ([]AuthorInte
 			InteractionCount: interactionCount,
 		})
 	}
+	log.Printf("Fetched top interacted authors in %v", time.Since(start))
 	return authors, nil
 }
+
 func (r *NostrRepository) GetViralPosts(ctx context.Context, limit int) ([]FeedPost, error) {
 	// Calculate the date 3 days ago
 	threeDaysAgo := time.Now().AddDate(0, 0, -3)
@@ -270,6 +273,7 @@ func (r *NostrRepository) GetViralPosts(ctx context.Context, limit int) ([]FeedP
 
 func (r *NostrRepository) fetchPostsFromAuthors(authorInteractions []AuthorInteraction) ([]EventWithMeta, error) {
 	// Extract author IDs and interaction counts
+	start := time.Now()
 	authorIDs := make([]string, 0, len(authorInteractions))
 	interactionCounts := make([]int, 0, len(authorInteractions))
 
@@ -341,6 +345,7 @@ func (r *NostrRepository) fetchPostsFromAuthors(authorInteractions []AuthorInter
 		})
 	}
 
+	log.Printf("Fetched posts from authors in %v", time.Since(start))
 	return posts, nil
 }
 
