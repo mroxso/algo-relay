@@ -187,14 +187,38 @@ func decodeBolt11Invoice(bolt11 string) (int64, error) {
 func (r *NostrRepository) fetchTopInteractedAuthors(userID string) ([]AuthorInteraction, error) {
 	start := time.Now()
 	query := `
-		SELECT author_id, COUNT(*) AS interaction_count
-		FROM posts p
-		LEFT JOIN zaps z ON p.id = z.post_id
-		LEFT JOIN reactions r ON p.id = r.post_id
-		LEFT JOIN comments c ON p.id = c.post_id
-		WHERE z.zapper_id = $1 OR r.reactor_id = $1 OR c.commenter_id = $1
+		WITH zap_counts AS (
+			SELECT p.author_id, COUNT(z.id) AS interaction_count
+			FROM posts p
+			JOIN zaps z ON p.id = z.post_id
+			WHERE z.zapper_id = $1
+			GROUP BY p.author_id
+		),
+		reaction_counts AS (
+			SELECT p.author_id, COUNT(r.id) AS interaction_count
+			FROM posts p
+			JOIN reactions r ON p.id = r.post_id
+			WHERE r.reactor_id = $1
+			GROUP BY p.author_id
+		),
+		comment_counts AS (
+			SELECT p.author_id, COUNT(c.id) AS interaction_count
+			FROM posts p
+			JOIN comments c ON p.id = c.post_id
+			WHERE c.commenter_id = $1
+			GROUP BY p.author_id
+		)
+		SELECT author_id, SUM(interaction_count) AS interaction_count
+		FROM (
+			SELECT author_id, interaction_count FROM zap_counts
+			UNION ALL
+			SELECT author_id, interaction_count FROM reaction_counts
+			UNION ALL
+			SELECT author_id, interaction_count FROM comment_counts
+		) AS interactions
 		GROUP BY author_id
-		ORDER BY interaction_count DESC
+		ORDER BY interaction_count DESC;
+
 	`
 	rows, err := r.db.QueryContext(context.Background(), query, userID)
 	if err != nil {
