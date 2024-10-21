@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/lib/pq"
@@ -34,6 +35,12 @@ type AuthorInteraction struct {
 	AuthorID         string
 	InteractionCount int
 }
+
+var viralPostCache struct {
+	Posts     []FeedPost
+	Timestamp time.Time
+}
+var viralPostCacheMutex sync.Mutex
 
 func NewNostrRepository(db *sql.DB) *NostrRepository {
 	return &NostrRepository{db: db}
@@ -335,4 +342,36 @@ func (r *NostrRepository) fetchPostsFromAuthors(authorInteractions []AuthorInter
 	}
 
 	return posts, nil
+}
+
+func refreshViralPostsPeriodically(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour) // Refresh every hour
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			refreshViralPosts(ctx)
+		case <-ctx.Done():
+			log.Println("Stopping viral post refresh")
+			return
+		}
+	}
+}
+
+func refreshViralPosts(ctx context.Context) {
+	// Fetch new viral posts
+	viralPosts, err := repository.GetViralPosts(ctx, 100) // Set a reasonable limit for viral posts
+	if err != nil {
+		log.Printf("Failed to refresh viral posts: %v", err)
+		return
+	}
+
+	// Cache the viral posts
+	viralPostCacheMutex.Lock()
+	viralPostCache.Posts = viralPosts
+	viralPostCache.Timestamp = time.Now()
+	viralPostCacheMutex.Unlock()
+
+	log.Println("Viral posts refreshed")
 }

@@ -108,6 +108,10 @@ func main() {
 	}
 
 	go subscribeAll()
+	go func() {
+		refreshViralPosts(ctx)                // Immediate refresh when the application starts
+		go refreshViralPostsPeriodically(ctx) // Start the periodic refresh
+	}()
 
 	relay := khatru.NewRelay()
 	relay.Info.Description = os.Getenv("RELAY_DESCRIPTION")

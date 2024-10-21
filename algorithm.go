@@ -50,11 +50,9 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 	// Check if feed generation is already pending
 	pendingRequestsMutex.Lock()
 	if pending, exists := pendingRequests[userID]; exists {
-		// Another request is generating the feed, so wait for it to complete
 		log.Println("Waiting for existing feed generation for user:", userID)
 		pendingRequestsMutex.Unlock()
 		<-pending // Wait until the channel is closed
-		// After waiting, use the cached feed
 		if cached, ok := getCachedUserFeed(userID); ok && now.Sub(cached.Timestamp) < feedCacheDuration {
 			return createFeedResult(cached.Feed, limit), nil
 		}
@@ -66,7 +64,6 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 	pendingRequests[userID] = pending
 	pendingRequestsMutex.Unlock()
 
-	// Generate the feed
 	defer func() {
 		pendingRequestsMutex.Lock()
 		close(pending) // Signal that feed generation is complete
@@ -74,17 +71,17 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 		pendingRequestsMutex.Unlock()
 	}()
 
-	// Proceed with feed generation
+	// Generate the feed
 	log.Println("No cache or pending request found, generating feed for user:", userID)
 	authorFeed, err := repository.GetUserFeedByAuthors(ctx, userID, limit/2)
 	if err != nil {
 		return nil, err
 	}
 
-	viralFeed, err := repository.GetViralPosts(ctx, limit/2)
-	if err != nil {
-		return nil, err
-	}
+	// Get viral posts from cache
+	viralPostCacheMutex.Lock()
+	viralFeed := viralPostCache.Posts
+	viralPostCacheMutex.Unlock()
 
 	combinedFeed := append(authorFeed, viralFeed...)
 
@@ -93,12 +90,9 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 	filteredFeed := make([]FeedPost, 0, len(combinedFeed))
 	for _, feedPost := range combinedFeed {
 		authorID := feedPost.Event.PubKey
-		// Skip the user's own posts
 		if authorID == userID {
 			continue
 		}
-
-		// Allow up to 1 post per author
 		if authorPostCount[authorID] < 1 {
 			filteredFeed = append(filteredFeed, feedPost)
 			authorPostCount[authorID]++
