@@ -118,7 +118,7 @@ func main() {
 	relay.Info.Name = os.Getenv("RELAY_NAME")
 	relay.Info.PubKey = os.Getenv("RELAY_PUBKEY")
 	relay.Info.Software = "https://github.com/bitvora/algo-relay"
-	relay.Info.Version = "0.1.0"
+	relay.Info.Version = "0.1.1"
 	relay.Info.Icon = os.Getenv("RELAY_ICON")
 
 	relay.RejectConnection = append(relay.RejectConnection,
