@@ -28,14 +28,15 @@ var (
 )
 
 type CachedFeeds struct {
-	Feeds     [][]FeedPost // Multiple feed variations
+	Feeds     [][]FeedPost // Multiple feed variants
 	Timestamp time.Time
 }
 
 var userFeedCache sync.Map
 
 const feedCacheDuration = 5 * time.Minute
-const numFeedVariants = 5 // Number of different feed variants to generate
+const numFeedVariants = 5   // Number of different feed variants to generate
+const variantFeedSize = 100 // Each variant feed size (fixed to 100 posts)
 
 var pendingRequests = make(map[string]chan struct{})
 var pendingRequestsMutex sync.Mutex
@@ -75,13 +76,13 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 
 	// Generate the feed variants
 	log.Println("No cache or pending request found, generating feed variants for user:", userID)
-	authorFeed, err := repository.GetUserFeedByAuthors(ctx, userID, limit*numFeedVariants)
+	authorFeed, err := repository.GetUserFeedByAuthors(ctx, userID, variantFeedSize*numFeedVariants)
 	if err != nil {
 		return nil, err
 	}
 
-	// Generate multiple feed variants from the author feed
-	feedVariants := generateFeedVariants(authorFeed, limit)
+	// Generate multiple feed variants with a fixed size of 100 posts each
+	feedVariants := generateFeedVariants(authorFeed, variantFeedSize)
 
 	// Cache the generated feed variants
 	userFeedCache.Store(userID, CachedFeeds{
@@ -104,7 +105,7 @@ func createRandomFeedResult(feedVariants [][]FeedPost, limit int) []nostr.Event 
 	randomIndex := rand.Intn(len(feedVariants))
 	selectedFeed := feedVariants[randomIndex]
 
-	// Convert the selected feed to nostr.Event results
+	// Convert the selected feed to nostr.Event results, applying the limit
 	var result []nostr.Event
 	for i, feedPost := range selectedFeed {
 		if i >= limit {
@@ -112,11 +113,11 @@ func createRandomFeedResult(feedVariants [][]FeedPost, limit int) []nostr.Event 
 		}
 		result = append(result, feedPost.Event)
 	}
-	log.Printf("Serving feed variant %d with %d posts", randomIndex, len(result))
+	log.Printf("Serving feed variant %d with %d posts (limit %d)", randomIndex, len(result), limit)
 	return result
 }
 
-func generateFeedVariants(authorFeed []FeedPost, limit int) [][]FeedPost {
+func generateFeedVariants(authorFeed []FeedPost, variantSize int) [][]FeedPost {
 	// Group posts by author
 	authorPosts := make(map[string][]FeedPost)
 	for _, post := range authorFeed {
@@ -137,13 +138,17 @@ func generateFeedVariants(authorFeed []FeedPost, limit int) [][]FeedPost {
 				feed = append(feed, posts[i%len(posts)])
 			}
 		}
-		// Sort each feed by score in descending order
+
+		// Sort each feed by score in descending order and truncate to variant size
 		sort.Slice(feed, func(i, j int) bool {
 			return feed[i].Score > feed[j].Score
 		})
+		if len(feed) > variantSize {
+			feed = feed[:variantSize]
+		}
 		feedVariants = append(feedVariants, feed)
 	}
-	log.Printf("Generated %d feed variants for user feed", numFeedVariants)
+	log.Printf("Generated %d feed variants for user, each with %d posts", numFeedVariants, variantSize)
 	return feedVariants
 }
 
