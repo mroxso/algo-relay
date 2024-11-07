@@ -38,8 +38,10 @@ const feedCacheDuration = 5 * time.Minute
 const numFeedVariants = 5   // Number of different feed variants to generate
 const variantFeedSize = 100 // Each variant feed size (fixed to 100 posts)
 
-var pendingRequests = make(map[string]chan struct{})
-var pendingRequestsMutex sync.Mutex
+var (
+	pendingRequests      = make(map[string]chan struct{})
+	pendingRequestsMutex sync.Mutex
+)
 
 func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, error) {
 	now := time.Now()
@@ -184,11 +186,11 @@ func (r *NostrRepository) GetUserFeedByAuthors(ctx context.Context, userID strin
 		return nil, err
 	}
 
-	var feedPosts []FeedPost
-	for _, post := range posts {
+	feedPosts := make([]FeedPost, len(posts))
+	for p, post := range posts {
 		interactionCount := getInteractionCountForAuthor(post.Event.PubKey, authorInteractions)
 		score := r.calculateAuthorPostScore(post, interactionCount)
-		feedPosts = append(feedPosts, FeedPost{Event: post.Event, Score: score})
+		feedPosts[p] = FeedPost{Event: post.Event, Score: score}
 	}
 
 	// Sort all posts by score in descending order initially
