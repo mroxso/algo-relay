@@ -81,8 +81,13 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 		return nil, err
 	}
 
-	// Generate multiple feed variants with a fixed size of 100 posts each
-	feedVariants := generateFeedVariants(authorFeed, variantFeedSize)
+	// Get viral posts from cache
+	viralPostCacheMutex.Lock()
+	viralFeed := viralPostCache.Posts
+	viralPostCacheMutex.Unlock()
+
+	// Generate multiple feed variants with a fixed size of 100 posts each, incorporating viral posts
+	feedVariants := generateFeedVariants(authorFeed, viralFeed, variantFeedSize)
 
 	// Cache the generated feed variants
 	userFeedCache.Store(userID, CachedFeeds{
@@ -117,7 +122,7 @@ func createRandomFeedResult(feedVariants [][]FeedPost, limit int) []nostr.Event 
 	return result
 }
 
-func generateFeedVariants(authorFeed []FeedPost, variantSize int) [][]FeedPost {
+func generateFeedVariants(authorFeed, viralFeed []FeedPost, variantSize int) [][]FeedPost {
 	// Group posts by author
 	authorPosts := make(map[string][]FeedPost)
 	for _, post := range authorFeed {
@@ -129,6 +134,9 @@ func generateFeedVariants(authorFeed []FeedPost, variantSize int) [][]FeedPost {
 	var feedVariants [][]FeedPost
 	for i := 0; i < numFeedVariants; i++ {
 		var feed []FeedPost
+		usedAuthors := make(map[string]bool)
+
+		// Add author posts for the variant
 		for _, posts := range authorPosts {
 			if len(posts) > i {
 				// Use a different post from this author in each variant, if available
@@ -136,6 +144,19 @@ func generateFeedVariants(authorFeed []FeedPost, variantSize int) [][]FeedPost {
 			} else {
 				// If not enough unique posts, wrap around to use existing ones
 				feed = append(feed, posts[i%len(posts)])
+			}
+			usedAuthors[posts[0].Event.PubKey] = true
+		}
+
+		// Add viral posts, ensuring no duplicate authors
+		for _, viralPost := range viralFeed {
+			if len(feed) >= variantSize {
+				break
+			}
+			authorID := viralPost.Event.PubKey
+			if !usedAuthors[authorID] {
+				feed = append(feed, viralPost)
+				usedAuthors[authorID] = true
 			}
 		}
 
@@ -148,7 +169,7 @@ func generateFeedVariants(authorFeed []FeedPost, variantSize int) [][]FeedPost {
 		}
 		feedVariants = append(feedVariants, feed)
 	}
-	log.Printf("Generated %d feed variants for user, each with %d posts", numFeedVariants, variantSize)
+	log.Printf("Generated %d feed variants for user, each with %d posts, including viral posts", numFeedVariants, variantSize)
 	return feedVariants
 }
 
