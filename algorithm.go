@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"math/rand"
 	"os"
 	"sort"
 	"strconv"
@@ -28,8 +27,9 @@ var (
 )
 
 type CachedFeeds struct {
-	Feeds     [][]FeedPost // Multiple feed variants
-	Timestamp time.Time
+	Feeds           [][]FeedPost // Multiple feed variants
+	Timestamp       time.Time
+	LastServedIndex int // Index of the last served feed variant
 }
 
 var userFeedCache sync.Map
@@ -38,10 +38,8 @@ const feedCacheDuration = 5 * time.Minute
 const numFeedVariants = 5   // Number of different feed variants to generate
 const variantFeedSize = 100 // Each variant feed size (fixed to 100 posts)
 
-var (
-	pendingRequests      = make(map[string]chan struct{})
-	pendingRequestsMutex sync.Mutex
-)
+var pendingRequests = make(map[string]chan struct{})
+var pendingRequestsMutex sync.Mutex
 
 func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, error) {
 	now := time.Now()
@@ -49,7 +47,7 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 	// Check if the feed variants are already cached
 	if cached, ok := getCachedUserFeeds(userID); ok && now.Sub(cached.Timestamp) < feedCacheDuration {
 		log.Println("Returning cached feed for user:", userID)
-		return createRandomFeedResult(cached.Feeds, limit), nil
+		return serveSequentialFeedResult(userID, cached, limit), nil
 	}
 
 	// Check if feed generation is already pending
@@ -59,7 +57,7 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 		pendingRequestsMutex.Unlock()
 		<-pending
 		if cached, ok := getCachedUserFeeds(userID); ok && now.Sub(cached.Timestamp) < feedCacheDuration {
-			return createRandomFeedResult(cached.Feeds, limit), nil
+			return serveSequentialFeedResult(userID, cached, limit), nil
 		}
 		return nil, fmt.Errorf("feed generation failed after waiting for cache")
 	}
@@ -91,13 +89,15 @@ func GetUserFeed(ctx context.Context, userID string, limit int) ([]nostr.Event, 
 	// Generate multiple feed variants with a fixed size of 100 posts each, incorporating viral posts
 	feedVariants := generateFeedVariants(authorFeed, viralFeed, variantFeedSize)
 
-	// Cache the generated feed variants
-	userFeedCache.Store(userID, CachedFeeds{
-		Feeds:     feedVariants,
-		Timestamp: now,
-	})
+	// Cache the generated feed variants with LastServedIndex initialized to -1
+	cachedFeeds := CachedFeeds{
+		Feeds:           feedVariants,
+		Timestamp:       now,
+		LastServedIndex: -1,
+	}
+	userFeedCache.Store(userID, cachedFeeds)
 
-	return createRandomFeedResult(feedVariants, limit), nil
+	return serveSequentialFeedResult(userID, cachedFeeds, limit), nil
 }
 
 func getCachedUserFeeds(userID string) (CachedFeeds, bool) {
@@ -107,10 +107,14 @@ func getCachedUserFeeds(userID string) (CachedFeeds, bool) {
 	return CachedFeeds{}, false
 }
 
-func createRandomFeedResult(feedVariants [][]FeedPost, limit int) []nostr.Event {
-	// Select a random feed variant to serve
-	randomIndex := rand.Intn(len(feedVariants))
-	selectedFeed := feedVariants[randomIndex]
+func serveSequentialFeedResult(userID string, cachedFeeds CachedFeeds, limit int) []nostr.Event {
+	// Determine the next feed variant to serve
+	nextIndex := (cachedFeeds.LastServedIndex + 1) % len(cachedFeeds.Feeds)
+	selectedFeed := cachedFeeds.Feeds[nextIndex]
+
+	// Update LastServedIndex in the cache
+	cachedFeeds.LastServedIndex = nextIndex
+	userFeedCache.Store(userID, cachedFeeds)
 
 	// Convert the selected feed to nostr.Event results, applying the limit
 	var result []nostr.Event
@@ -120,7 +124,7 @@ func createRandomFeedResult(feedVariants [][]FeedPost, limit int) []nostr.Event 
 		}
 		result = append(result, feedPost.Event)
 	}
-	log.Printf("Serving feed variant %d with %d posts (limit %d)", randomIndex, len(result), limit)
+	log.Printf("Serving feed variant %d with %d posts (limit %d) for user: %s", nextIndex, len(result), limit, userID)
 	return result
 }
 
@@ -186,11 +190,11 @@ func (r *NostrRepository) GetUserFeedByAuthors(ctx context.Context, userID strin
 		return nil, err
 	}
 
-	feedPosts := make([]FeedPost, len(posts))
-	for p, post := range posts {
+	var feedPosts []FeedPost
+	for _, post := range posts {
 		interactionCount := getInteractionCountForAuthor(post.Event.PubKey, authorInteractions)
 		score := r.calculateAuthorPostScore(post, interactionCount)
-		feedPosts[p] = FeedPost{Event: post.Event, Score: score}
+		feedPosts = append(feedPosts, FeedPost{Event: post.Event, Score: score})
 	}
 
 	// Sort all posts by score in descending order initially
@@ -250,6 +254,7 @@ func getWeightFloat64(envKey string) float64 {
 	if err != nil {
 		log.Printf("Error parsing float for %s: %v, defaulting to 1", envKey, err)
 		return 1
+
 	}
 
 	return w
