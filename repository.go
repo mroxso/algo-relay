@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +43,8 @@ var viralPostCache struct {
 }
 var viralPostCacheMutex sync.Mutex
 
+const PubkeyLength = 64
+
 func NewNostrRepository(db *sql.DB) *NostrRepository {
 	return &NostrRepository{db: db}
 }
@@ -54,6 +57,8 @@ func (r *NostrRepository) SaveNostrEvent(event *nostr.Event) error {
 		return r.saveReaction(event)
 	case 9735:
 		return r.saveZap(event)
+	case 3:
+		return r.upsertFollowList(event)
 	default:
 		return fmt.Errorf("unhandled event kind: %d", event.Kind)
 	}
@@ -416,4 +421,65 @@ func refreshViralPosts(ctx context.Context) {
 	viralPostCacheMutex.Unlock()
 
 	log.Println("Viral posts refreshed")
+}
+
+func (r *NostrRepository) upsertFollowList(event *nostr.Event) error {
+	// Validate the pubkey
+	if len(event.PubKey) != PubkeyLength {
+		return fmt.Errorf("invalid pubkey length")
+	}
+
+	// Extract "p" tags
+	var followPubkeys []string
+	for _, tag := range event.Tags {
+		if len(tag) < 2 || tag[0] != "p" {
+			continue
+		}
+		followPubkey := tag[1]
+		if len(followPubkey) == PubkeyLength {
+			followPubkeys = append(followPubkeys, followPubkey)
+		}
+	}
+
+	if len(followPubkeys) == 0 {
+		return fmt.Errorf("no valid follow pubkeys found in event tags")
+	}
+
+	// Begin a transaction
+	ctx := context.Background()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	// Delete existing follows for the pubkey
+	deleteQuery := `DELETE FROM follows WHERE pubkey = $1`
+	_, err = tx.ExecContext(ctx, deleteQuery, event.PubKey)
+	if err != nil {
+		return fmt.Errorf("failed to delete existing follows: %v", err)
+	}
+
+	// Insert new follows in batch
+	insertQuery := `INSERT INTO follows (pubkey, follow_id) VALUES `
+	valueStrings := []string{}
+	values := []interface{}{event.PubKey}
+
+	for i, followPubkey := range followPubkeys {
+		valueStrings = append(valueStrings, fmt.Sprintf("($1, $%d)", i+2))
+		values = append(values, followPubkey)
+	}
+	insertQuery += strings.Join(valueStrings, ",")
+	_, err = tx.ExecContext(ctx, insertQuery, values...)
+	if err != nil {
+		return fmt.Errorf("failed to insert new follows: %v", err)
+	}
+
+	// Commit the transaction
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("failed to commit transaction: %v", err)
+	}
+
+	return nil
 }

@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS comments (
     created_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS follows (
+    pubkey TEXT,
+    follow_id TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts(author_id);
 CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
 
@@ -44,3 +49,6 @@ CREATE INDEX IF NOT EXISTS idx_zaps_created_at ON zaps(created_at);
 CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id);
 CREATE INDEX IF NOT EXISTS idx_comments_commenter_id ON comments(commenter_id);
 CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_follows_pubkey ON follows(pubkey);
+CREATE INDEX IF NOT EXISTS idx_follows_follow_id ON follows(follow_id);
