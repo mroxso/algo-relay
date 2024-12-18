@@ -48,28 +48,20 @@ func getDBConnection() (*sql.DB, error) {
 }
 
 func initDB(db *sql.DB) error {
-	var exists bool
-	err := db.QueryRow("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'posts')").Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("error checking if posts table exists: %v", err)
-	}
+	log.Println("Checking and applying migrations")
 
-	if exists {
-		return nil
-	}
-
-	log.Println("Migration not applied, running migration")
-
+	// Read the migration SQL file
 	migrationSQL, err := os.ReadFile("sql/init.sql")
 	if err != nil {
 		return fmt.Errorf("error reading migration file: %v", err)
 	}
 
+	// Execute the migration script
 	_, err = db.Exec(string(migrationSQL))
 	if err != nil {
 		return fmt.Errorf("error applying migration: %v", err)
 	}
 
-	log.Println("Migration applied successfully")
+	log.Println("Migrations applied successfully")
 	return nil
 }

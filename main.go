@@ -198,6 +198,7 @@ func subscribeAll() {
 			nostr.KindTextNote,
 			nostr.KindReaction,
 			nostr.KindZap,
+			nostr.KindFollowList,
 		},
 		Since: &now,
 	}}
