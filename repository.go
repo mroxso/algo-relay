@@ -460,7 +460,6 @@ func (r *NostrRepository) upsertFollowList(event *nostr.Event) error {
 		return fmt.Errorf("failed to delete existing follows: %v", err)
 	}
 
-	// Insert new follows in batch
 	insertQuery := `INSERT INTO follows (pubkey, follow_id) VALUES `
 	valueStrings := []string{}
 	values := []interface{}{event.PubKey}
@@ -481,5 +480,100 @@ func (r *NostrRepository) upsertFollowList(event *nostr.Event) error {
 		return fmt.Errorf("failed to commit transaction: %v", err)
 	}
 
+	return nil
+}
+
+func (r *NostrRepository) PurgeCommentsOlderThan(months int) error {
+	cutoffDate := time.Now().AddDate(0, -months, 0)
+	query := `
+        DELETE FROM comments
+        WHERE created_at < $1;
+    `
+	result, err := r.db.ExecContext(context.Background(), query, cutoffDate)
+	if err != nil {
+		return fmt.Errorf("failed to purge comments: %v", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	fmt.Printf("Purged %d comments older than %d months\n", rowsAffected, months)
+	return nil
+}
+
+func (r *NostrRepository) PurgePostsOlderThan(months int) error {
+	cutoffDate := time.Now().AddDate(0, -months, 0)
+
+	// Delete reactions associated with old posts
+	reactionsQuery := `
+        DELETE FROM reactions
+        WHERE post_id IN (
+            SELECT id FROM posts WHERE created_at < $1
+        );
+    `
+	if _, err := r.db.ExecContext(context.Background(), reactionsQuery, cutoffDate); err != nil {
+		return fmt.Errorf("failed to purge reactions for old posts: %v", err)
+	}
+
+	// Delete comments associated with old posts
+	commentsQuery := `
+        DELETE FROM comments
+        WHERE post_id IN (
+            SELECT id FROM posts WHERE created_at < $1
+        );
+    `
+	if _, err := r.db.ExecContext(context.Background(), commentsQuery, cutoffDate); err != nil {
+		return fmt.Errorf("failed to purge comments for old posts: %v", err)
+	}
+
+	// Delete zaps associated with old posts
+	zapsQuery := `
+        DELETE FROM zaps
+        WHERE post_id IN (
+            SELECT id FROM posts WHERE created_at < $1
+        );
+    `
+	if _, err := r.db.ExecContext(context.Background(), zapsQuery, cutoffDate); err != nil {
+		return fmt.Errorf("failed to purge zaps for old posts: %v", err)
+	}
+
+	// Delete the old posts
+	postsQuery := `
+        DELETE FROM posts
+        WHERE created_at < $1;
+    `
+	result, err := r.db.ExecContext(context.Background(), postsQuery, cutoffDate)
+	if err != nil {
+		return fmt.Errorf("failed to purge posts: %v", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	log.Printf("Purged %d posts older than %d months\n", rowsAffected, months)
+	return nil
+}
+
+func (r *NostrRepository) PurgeReactionsOlderThan(months int) error {
+	cutoffDate := time.Now().AddDate(0, -months, 0)
+	query := `
+        DELETE FROM reactions
+        WHERE created_at < $1;
+    `
+	result, err := r.db.ExecContext(context.Background(), query, cutoffDate)
+	if err != nil {
+		return fmt.Errorf("failed to purge reactions: %v", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	fmt.Printf("Purged %d reactions older than %d months\n", rowsAffected, months)
+	return nil
+}
+
+func (r *NostrRepository) PurgeZapsOlderThan(months int) error {
+	cutoffDate := time.Now().AddDate(0, -months, 0)
+	query := `
+        DELETE FROM zaps
+        WHERE created_at < $1;
+    `
+	result, err := r.db.ExecContext(context.Background(), query, cutoffDate)
+	if err != nil {
+		return fmt.Errorf("failed to purge zaps: %v", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	fmt.Printf("Purged %d zaps older than %d months\n", rowsAffected, months)
 	return nil
 }

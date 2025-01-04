@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/fiatjaf/khatru"
@@ -98,6 +99,16 @@ func main() {
 	viralPostDampening = getWeightFloat64("VIRAL_POST_DAMPENING")
 	decayRate = getWeightFloat64("DECAY_RATE")
 
+	purgeMonthsStr := os.Getenv("PURGE_MONTHS")
+	if purgeMonthsStr == "" {
+		log.Fatal("PURGE_MONTHS environment variable is not set")
+	}
+
+	purgeMonths, err := strconv.Atoi(purgeMonthsStr)
+	if err != nil {
+		log.Fatalf("Invalid PURGE_MONTHS value: %v\n", err)
+	}
+
 	if *importFlag {
 		log.Println("📦 importing notes")
 		importNotes(nostr.KindTextNote)
@@ -108,6 +119,8 @@ func main() {
 	}
 
 	go subscribeAll()
+	go purgeData(purgeMonths)
+
 	go func() {
 		refreshViralPosts(ctx)                // Immediate refresh when the application starts
 		go refreshViralPostsPeriodically(ctx) // Start the periodic refresh
@@ -215,5 +228,34 @@ func loadEnv() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatalf("Error loading .env file: %v", err)
+	}
+}
+
+func purgeData(months int) {
+	ticker := time.NewTicker(24 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			repository := NewNostrRepository(db) // Assumes `db` is initialized globally or passed
+
+			log.Println("Starting data purge...")
+
+			if err := repository.PurgeCommentsOlderThan(months); err != nil {
+				log.Printf("Error purging comments: %v\n", err)
+			}
+			if err := repository.PurgePostsOlderThan(months); err != nil {
+				log.Printf("Error purging posts: %v\n", err)
+			}
+			if err := repository.PurgeReactionsOlderThan(months); err != nil {
+				log.Printf("Error purging reactions: %v\n", err)
+			}
+			if err := repository.PurgeZapsOlderThan(months); err != nil {
+				log.Printf("Error purging zaps: %v\n", err)
+			}
+
+			log.Println("Data purge completed.")
+		}
 	}
 }
