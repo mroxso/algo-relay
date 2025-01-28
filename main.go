@@ -96,7 +96,7 @@ func main() {
 	weightZapsGlobal = getWeightFloat64("WEIGHT_ZAPS_GLOBAL")
 	weightRecency = getWeightFloat64("WEIGHT_RECENCY")
 	viralThreshold = getWeightFloat64("VIRAL_THRESHOLD")
-	viralPostDampening = getWeightFloat64("VIRAL_POST_DAMPENING")
+	viralNoteDampening = getWeightFloat64("VIRAL_NOTE_DAMPENING")
 	decayRate = getWeightFloat64("DECAY_RATE")
 
 	purgeMonthsStr := os.Getenv("PURGE_MONTHS")
@@ -111,9 +111,12 @@ func main() {
 
 	if *importFlag {
 		log.Println("📦 importing notes")
+		importNotes(nostr.KindArticle)
+		importNotes(20) // KindImage
 		importNotes(nostr.KindTextNote)
 		importNotes(nostr.KindReaction)
 		importNotes(nostr.KindZap)
+
 		log.Println("📦 done importing notes. Please restart relay")
 		return
 	}
@@ -122,8 +125,8 @@ func main() {
 	go purgeData(purgeMonths)
 
 	go func() {
-		refreshViralPosts(ctx)                // Immediate refresh when the application starts
-		go refreshViralPostsPeriodically(ctx) // Start the periodic refresh
+		refreshViralNotes(ctx)                // Immediate refresh when the application starts
+		go refreshViralNotesPeriodically(ctx) // Start the periodic refresh
 	}()
 
 	relay := khatru.NewRelay()
@@ -182,7 +185,8 @@ func main() {
 				limit = 50
 			}
 
-			events, err := GetUserFeed(ctx, authenticatedUser, limit)
+			events, err := GetUserFeed(ctx, authenticatedUser, limit, copyFilter.Kinds[0])
+			fmt.Println("getting events of kind:", copyFilter.Kinds[0])
 			if err != nil {
 				log.Println("Error fetching most reacted posts:", err)
 				return
@@ -212,6 +216,8 @@ func subscribeAll() {
 			nostr.KindReaction,
 			nostr.KindZap,
 			nostr.KindFollowList,
+			nostr.KindArticle,
+			20, // KindImage
 		},
 		Since: &now,
 	}}
@@ -238,14 +244,14 @@ func purgeData(months int) {
 	for {
 		select {
 		case <-ticker.C:
-			repository := NewNostrRepository(db) // Assumes `db` is initialized globally or passed
+			repository := NewNostrRepository(db)
 
 			log.Println("Starting data purge...")
 
 			if err := repository.PurgeCommentsOlderThan(months); err != nil {
 				log.Printf("Error purging comments: %v\n", err)
 			}
-			if err := repository.PurgePostsOlderThan(months); err != nil {
+			if err := repository.PurgeNotesOlderThan(months); err != nil {
 				log.Printf("Error purging posts: %v\n", err)
 			}
 			if err := repository.PurgeReactionsOlderThan(months); err != nil {

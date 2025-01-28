@@ -18,7 +18,7 @@ type NostrRepository struct {
 	db *sql.DB
 }
 
-type FeedPost struct {
+type FeedNote struct {
 	Event nostr.Event
 	Score float64
 }
@@ -37,11 +37,11 @@ type AuthorInteraction struct {
 	InteractionCount int
 }
 
-var viralPostCache struct {
-	Posts     []FeedPost
+var viralNoteCache struct {
+	notes     []FeedNote
 	Timestamp time.Time
 }
-var viralPostCacheMutex sync.Mutex
+var viralNoteCacheMutex sync.Mutex
 
 const PubkeyLength = 64
 
@@ -51,41 +51,43 @@ func NewNostrRepository(db *sql.DB) *NostrRepository {
 
 func (r *NostrRepository) SaveNostrEvent(event *nostr.Event) error {
 	switch event.Kind {
-	case 1:
-		return r.savePostOrComment(event)
-	case 7:
+	case 1: // note
+		return r.saveNoteOrComment(event)
+	case 7: // Reaction
 		return r.saveReaction(event)
-	case 9735:
+	case 9735: // Zap
 		return r.saveZap(event)
-	case 3:
+	case 3: // Follow
 		return r.upsertFollowList(event)
+	case 2: // Comment
+		return r.saveNoteOrComment(event)
 	default:
-		return fmt.Errorf("unhandled event kind: %d", event.Kind)
+		return r.saveNoteWithKind(event)
 	}
 }
 
-func (r *NostrRepository) savePostOrComment(event *nostr.Event) error {
+func (r *NostrRepository) saveNoteWithKind(event *nostr.Event) error {
+	query := `
+        INSERT INTO notes (id, author_id, kind, content, raw_json, created_at)
+        VALUES ($1, $2, $3, $4, $5, to_timestamp($6))
+        ON CONFLICT (id) DO NOTHING;
+    `
+	_, err := r.db.ExecContext(context.Background(), query,
+		event.ID, event.PubKey, event.Kind, event.Content, event.String(), event.CreatedAt)
+	return err
+}
+
+func (r *NostrRepository) saveNoteOrComment(event *nostr.Event) error {
 	rootID := getRootNoteID(event)
 	if rootID == "" {
-		return r.savePost(event)
+		return r.saveNoteWithKind(event)
 	}
 	return r.saveComment(event, rootID)
 }
 
-func (r *NostrRepository) savePost(event *nostr.Event) error {
-	query := `
-        INSERT INTO posts (id, author_id, content, raw_json, created_at)
-        VALUES ($1, $2, $3, $4, to_timestamp($5))
-        ON CONFLICT (id) DO NOTHING;
-    `
-	_, err := r.db.ExecContext(context.Background(), query,
-		event.ID, event.PubKey, event.Content, event.String(), event.CreatedAt)
-	return err
-}
-
 func (r *NostrRepository) saveComment(event *nostr.Event, rootID string) error {
 	query := `
-        INSERT INTO comments (id, post_id, commenter_id, created_at)
+        INSERT INTO comments (id, note_id, commenter_id, created_at)
         VALUES ($1, $2, $3, to_timestamp($4))
         ON CONFLICT (id) DO NOTHING;
     `
@@ -108,22 +110,22 @@ func getRootNoteID(event *nostr.Event) string {
 }
 
 func (r *NostrRepository) saveReaction(event *nostr.Event) error {
-	postID, err := getTaggedPostID(event)
+	noteID, err := getTaggedNoteID(event)
 	if err != nil {
 		return err
 	}
 	query := `
-        INSERT INTO reactions (id, post_id, reactor_id, created_at)
+        INSERT INTO reactions (id, note_id, reactor_id, created_at)
         VALUES ($1, $2, $3, to_timestamp($4))
         ON CONFLICT (id) DO NOTHING;
     `
 	_, err = r.db.ExecContext(context.Background(), query,
-		event.ID, postID, event.PubKey, event.CreatedAt)
+		event.ID, noteID, event.PubKey, event.CreatedAt)
 	return err
 }
 
 func (r *NostrRepository) saveZap(event *nostr.Event) error {
-	postID, err := getTaggedPostID(event)
+	noteID, err := getTaggedNoteID(event)
 	if err != nil {
 		return err
 	}
@@ -136,12 +138,12 @@ func (r *NostrRepository) saveZap(event *nostr.Event) error {
 		return err
 	}
 	query := `
-        INSERT INTO zaps (id, post_id, zapper_id, amount, created_at)
+        INSERT INTO zaps (id, note_id, zapper_id, amount, created_at)
         VALUES ($1, $2, $3, $4, to_timestamp($5))
         ON CONFLICT (id) DO NOTHING;
     `
 	_, err = r.db.ExecContext(context.Background(), query,
-		event.ID, postID, zapperID, amount, event.CreatedAt)
+		event.ID, noteID, zapperID, amount, event.CreatedAt)
 	return err
 }
 
@@ -162,13 +164,13 @@ func getZapperID(event *nostr.Event) (string, error) {
 	return "", fmt.Errorf("no zapper pubkey found in description tag")
 }
 
-func getTaggedPostID(event *nostr.Event) (string, error) {
+func getTaggedNoteID(event *nostr.Event) (string, error) {
 	for _, tag := range event.Tags {
 		if len(tag) > 0 && tag[0] == "e" {
 			return tag[1], nil
 		}
 	}
-	return "", fmt.Errorf("no post ID found in event tags")
+	return "", fmt.Errorf("no note ID found in event tags")
 }
 
 func getZapAmount(event *nostr.Event) (int64, error) {
@@ -194,22 +196,22 @@ func (r *NostrRepository) fetchTopInteractedAuthors(userID string) ([]AuthorInte
 	query := `
 		WITH zap_counts AS (
 			SELECT p.author_id, COUNT(z.id) AS interaction_count
-			FROM posts p
-			JOIN zaps z ON p.id = z.post_id
+			FROM notes p
+			JOIN zaps z ON p.id = z.note_id
 			WHERE z.zapper_id = $1
 			GROUP BY p.author_id
 		),
 		reaction_counts AS (
 			SELECT p.author_id, COUNT(r.id) AS interaction_count
-			FROM posts p
-			JOIN reactions r ON p.id = r.post_id
+			FROM notes p
+			JOIN reactions r ON p.id = r.note_id
 			WHERE r.reactor_id = $1
 			GROUP BY p.author_id
 		),
 		comment_counts AS (
 			SELECT p.author_id, COUNT(c.id) AS interaction_count
-			FROM posts p
-			JOIN comments c ON p.id = c.post_id
+			FROM notes p
+			JOIN comments c ON p.id = c.note_id
 			WHERE c.commenter_id = $1
 			GROUP BY p.author_id
 		)
@@ -246,17 +248,17 @@ func (r *NostrRepository) fetchTopInteractedAuthors(userID string) ([]AuthorInte
 	return authors, nil
 }
 
-func (r *NostrRepository) GetViralPosts(ctx context.Context, limit int) ([]FeedPost, error) {
+func (r *NostrRepository) GetViralnotes(ctx context.Context, limit int) ([]FeedNote, error) {
 	// Calculate the date 3 days ago
 	threeDaysAgo := time.Now().AddDate(0, 0, -3)
 
 	query := `
     SELECT p.raw_json, COUNT(c.id) AS comment_count, COUNT(r.id) AS reaction_count, COUNT(z.id) AS zap_count
-    FROM posts p
-    LEFT JOIN comments c ON p.id = c.post_id
-    LEFT JOIN reactions r ON p.id = r.post_id
-    LEFT JOIN zaps z ON p.id = z.post_id
-    WHERE p.created_at >= $3  -- Filter to only include posts from the last 3 days
+    FROM notes p
+    LEFT JOIN comments c ON p.id = c.note_id
+    LEFT JOIN reactions r ON p.id = r.note_id
+    LEFT JOIN zaps z ON p.id = z.note_id
+    WHERE p.created_at >= $3  -- Filter to only include notes from the last 3 days
     GROUP BY p.id
     HAVING COUNT(c.id) + COUNT(r.id) + COUNT(z.id) >= $1
     ORDER BY COUNT(c.id) + COUNT(r.id) + COUNT(z.id) DESC
@@ -269,7 +271,7 @@ func (r *NostrRepository) GetViralPosts(ctx context.Context, limit int) ([]FeedP
 	}
 	defer rows.Close()
 
-	viralPosts := make([]FeedPost, 0, limit)
+	viralnotes := make([]FeedNote, 0, limit)
 	for rows.Next() {
 		var rawJSON string
 		var commentCount, reactionCount, zapCount int
@@ -288,18 +290,18 @@ func (r *NostrRepository) GetViralPosts(ctx context.Context, limit int) ([]FeedP
 		score := (float64(commentCount)*weightCommentsGlobal +
 			float64(reactionCount)*weightReactionsGlobal +
 			float64(zapCount)*weightZapsGlobal +
-			recencyFactor*weightRecency) * viralPostDampening
+			recencyFactor*weightRecency) * viralNoteDampening
 
-		viralPosts = append(viralPosts, FeedPost{
+		viralnotes = append(viralnotes, FeedNote{
 			Event: event,
 			Score: score,
 		})
 	}
 
-	return viralPosts, nil
+	return viralnotes, nil
 }
 
-func (r *NostrRepository) fetchPostsFromAuthors(authorInteractions []AuthorInteraction) ([]EventWithMeta, error) {
+func (r *NostrRepository) fetchNotesFromAuthors(authorInteractions []AuthorInteraction, kind int) ([]EventWithMeta, error) {
 	// Extract author IDs and interaction counts
 	start := time.Now()
 	authorIDs := make([]string, 0, len(authorInteractions))
@@ -318,7 +320,7 @@ func (r *NostrRepository) fetchPostsFromAuthors(authorInteractions []AuthorInter
 		return nil, nil
 	}
 
-	// Get the cutoff date for posts older than 1 week
+	// Get the cutoff date for notes older than 1 week
 	oneWeekAgo := time.Now().AddDate(0, 0, -7)
 
 	query := `
@@ -330,39 +332,40 @@ func (r *NostrRepository) fetchPostsFromAuthors(authorInteractions []AuthorInter
 			COALESCE(reaction_counts.reaction_count, 0) AS reaction_count,
 			COALESCE(zap_counts.zap_count, 0) AS zap_count,
 			ai.interaction_count
-		FROM posts p
+		FROM notes p
 		JOIN author_interactions ai ON p.author_id = ai.author_id
 		LEFT JOIN (
-			SELECT post_id, COUNT(*) AS comment_count
+			SELECT note_id, COUNT(*) AS comment_count
 			FROM comments
-			WHERE created_at >= $4  -- Ensure the date filter applies to comments
-			GROUP BY post_id
-		) comment_counts ON p.id = comment_counts.post_id
+			WHERE created_at >= $4
+			GROUP BY note_id
+		) comment_counts ON p.id = comment_counts.note_id
 		LEFT JOIN (
-			SELECT post_id, COUNT(*) AS reaction_count
+			SELECT note_id, COUNT(*) AS reaction_count
 			FROM reactions
-			WHERE created_at >= $4  -- Ensure the date filter applies to reactions
-			GROUP BY post_id
-		) reaction_counts ON p.id = reaction_counts.post_id
+			WHERE created_at >= $4
+			GROUP BY note_id
+		) reaction_counts ON p.id = reaction_counts.note_id
 		LEFT JOIN (
-			SELECT post_id, COUNT(*) AS zap_count
+			SELECT note_id, COUNT(*) AS zap_count
 			FROM zaps
-			WHERE created_at >= $4  -- Ensure the date filter applies to zaps
-			GROUP BY post_id
-		) zap_counts ON p.id = zap_counts.post_id
+			WHERE created_at >= $4
+			GROUP BY note_id
+		) zap_counts ON p.id = zap_counts.note_id
 		WHERE p.author_id = ANY($1)
 		AND ai.interaction_count >= 5  -- Filter by interaction count
-		AND p.created_at >= $4         -- Filter posts created within the last week
+		AND p.created_at >= $4         -- Filter notes created within the last week
+		AND p.kind = $5                -- Filter by kind
 		ORDER BY p.created_at DESC;
 	`
 
-	rows, err := r.db.QueryContext(context.Background(), query, pq.Array(authorIDs), pq.Array(authorIDs), pq.Array(interactionCounts), oneWeekAgo)
+	rows, err := r.db.QueryContext(context.Background(), query, pq.Array(authorIDs), pq.Array(authorIDs), pq.Array(interactionCounts), oneWeekAgo, kind)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	posts := make([]EventWithMeta, 0, len(interactionCounts))
+	notes := make([]EventWithMeta, 0, len(interactionCounts))
 	for rows.Next() {
 		var rawJSON string
 		var commentCount, reactionCount, zapCount, interactionCount int
@@ -377,7 +380,7 @@ func (r *NostrRepository) fetchPostsFromAuthors(authorInteractions []AuthorInter
 			continue
 		}
 
-		posts = append(posts, EventWithMeta{
+		notes = append(notes, EventWithMeta{
 			Event:                event,
 			GlobalCommentsCount:  commentCount,
 			GlobalReactionsCount: reactionCount,
@@ -387,40 +390,40 @@ func (r *NostrRepository) fetchPostsFromAuthors(authorInteractions []AuthorInter
 		})
 	}
 
-	log.Printf("Fetched posts from authors in %v", time.Since(start))
-	return posts, nil
+	fmt.Printf("Fetched this many notes in this many seconds: %d, %v\n", len(notes), time.Since(start))
+	return notes, nil
 }
 
-func refreshViralPostsPeriodically(ctx context.Context) {
+func refreshViralNotesPeriodically(ctx context.Context) {
 	ticker := time.NewTicker(time.Hour) // Refresh every hour
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			refreshViralPosts(ctx)
+			refreshViralNotes(ctx)
 		case <-ctx.Done():
-			log.Println("Stopping viral post refresh")
+			log.Println("Stopping viral note refresh")
 			return
 		}
 	}
 }
 
-func refreshViralPosts(ctx context.Context) {
-	// Fetch new viral posts
-	viralPosts, err := repository.GetViralPosts(ctx, 100) // Set a reasonable limit for viral posts
+func refreshViralNotes(ctx context.Context) {
+	// Fetch new viral notes
+	viralnotes, err := repository.GetViralnotes(ctx, 100) // Set a reasonable limit for viral notes
 	if err != nil {
-		log.Printf("Failed to refresh viral posts: %v", err)
+		log.Printf("Failed to refresh viral notes: %v", err)
 		return
 	}
 
-	// Cache the viral posts
-	viralPostCacheMutex.Lock()
-	viralPostCache.Posts = viralPosts
-	viralPostCache.Timestamp = time.Now()
-	viralPostCacheMutex.Unlock()
+	// Cache the viral notes
+	viralNoteCacheMutex.Lock()
+	viralNoteCache.notes = viralnotes
+	viralNoteCache.Timestamp = time.Now()
+	viralNoteCacheMutex.Unlock()
 
-	log.Println("Viral posts refreshed")
+	log.Println("Viral notes refreshed")
 }
 
 func (r *NostrRepository) upsertFollowList(event *nostr.Event) error {
@@ -453,7 +456,6 @@ func (r *NostrRepository) upsertFollowList(event *nostr.Event) error {
 	}
 	defer tx.Rollback()
 
-	// Delete existing follows for the pubkey
 	deleteQuery := `DELETE FROM follows WHERE pubkey = $1`
 	_, err = tx.ExecContext(ctx, deleteQuery, event.PubKey)
 	if err != nil {
@@ -474,7 +476,6 @@ func (r *NostrRepository) upsertFollowList(event *nostr.Event) error {
 		return fmt.Errorf("failed to insert new follows: %v", err)
 	}
 
-	// Commit the transaction
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("failed to commit transaction: %v", err)
@@ -498,53 +499,53 @@ func (r *NostrRepository) PurgeCommentsOlderThan(months int) error {
 	return nil
 }
 
-func (r *NostrRepository) PurgePostsOlderThan(months int) error {
+func (r *NostrRepository) PurgeNotesOlderThan(months int) error {
 	cutoffDate := time.Now().AddDate(0, -months, 0)
 
-	// Delete reactions associated with old posts
+	// Delete reactions associated with old notes
 	reactionsQuery := `
         DELETE FROM reactions
-        WHERE post_id IN (
-            SELECT id FROM posts WHERE created_at < $1
+        WHERE note_id IN (
+            SELECT id FROM notes WHERE created_at < $1
         );
     `
 	if _, err := r.db.ExecContext(context.Background(), reactionsQuery, cutoffDate); err != nil {
-		return fmt.Errorf("failed to purge reactions for old posts: %v", err)
+		return fmt.Errorf("failed to purge reactions for old notes: %v", err)
 	}
 
-	// Delete comments associated with old posts
+	// Delete comments associated with old notes
 	commentsQuery := `
         DELETE FROM comments
-        WHERE post_id IN (
-            SELECT id FROM posts WHERE created_at < $1
+        WHERE note_id IN (
+            SELECT id FROM notes WHERE created_at < $1
         );
     `
 	if _, err := r.db.ExecContext(context.Background(), commentsQuery, cutoffDate); err != nil {
-		return fmt.Errorf("failed to purge comments for old posts: %v", err)
+		return fmt.Errorf("failed to purge comments for old notes: %v", err)
 	}
 
-	// Delete zaps associated with old posts
+	// Delete zaps associated with old notes
 	zapsQuery := `
         DELETE FROM zaps
-        WHERE post_id IN (
-            SELECT id FROM posts WHERE created_at < $1
+        WHERE note_id IN (
+            SELECT id FROM notes WHERE created_at < $1
         );
     `
 	if _, err := r.db.ExecContext(context.Background(), zapsQuery, cutoffDate); err != nil {
-		return fmt.Errorf("failed to purge zaps for old posts: %v", err)
+		return fmt.Errorf("failed to purge zaps for old notes: %v", err)
 	}
 
-	// Delete the old posts
-	postsQuery := `
-        DELETE FROM posts
+	// Delete the old notes
+	notesQuery := `
+        DELETE FROM notes
         WHERE created_at < $1;
     `
-	result, err := r.db.ExecContext(context.Background(), postsQuery, cutoffDate)
+	result, err := r.db.ExecContext(context.Background(), notesQuery, cutoffDate)
 	if err != nil {
-		return fmt.Errorf("failed to purge posts: %v", err)
+		return fmt.Errorf("failed to purge notes: %v", err)
 	}
 	rowsAffected, _ := result.RowsAffected()
-	log.Printf("Purged %d posts older than %d months\n", rowsAffected, months)
+	log.Printf("Purged %d notes older than %d months\n", rowsAffected, months)
 	return nil
 }
 
