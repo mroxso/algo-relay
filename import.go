@@ -12,12 +12,12 @@ const layout = "2006-01-02"
 
 func importNotes(kind int) {
 	ctx := context.Background()
-	startDate := time.Now().Add(-30 * 24 * time.Hour)
+	startDate := time.Now().Add(-5 * 24 * time.Hour)
 	startTime, _ := time.Parse(layout, startDate.Format(layout))
 	endTime := startTime.Add(24 * time.Hour)
 
 	for {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
 		startTimestamp := nostr.Timestamp(startTime.Unix())
