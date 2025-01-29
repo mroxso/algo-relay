@@ -321,7 +321,7 @@ func (r *NostrRepository) fetchNotesFromAuthors(authorInteractions []AuthorInter
 	}
 
 	// Get the cutoff date for notes older than 1 week
-	oneWeekAgo := time.Now().AddDate(0, 0, -7)
+	oneWeekAgo := time.Now().AddDate(0, 0, -30)
 
 	query := `
 		WITH author_interactions AS (

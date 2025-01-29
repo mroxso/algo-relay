@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand/v2"
 	"os"
 	"sort"
 	"strconv"
@@ -48,11 +49,13 @@ func getCacheKey(userID string, kind int) string {
 func GetUserFeed(ctx context.Context, userID string, limit, kind int) ([]nostr.Event, error) {
 	now := time.Now()
 
+	// Check cache first
 	if cached, ok := getCachedUserFeeds(userID, kind); ok && now.Sub(cached.Timestamp) < feedCacheDuration {
 		log.Println("Returning cached feed for user:", userID, "kind:", kind)
 		return serveSequentialFeedResult(userID, kind, cached, limit), nil
 	}
 
+	// Ensure no duplicate feed generation for the same user/kind
 	pendingRequestsMutex.Lock()
 	cacheKey := getCacheKey(userID, kind)
 	if pending, exists := pendingRequests[cacheKey]; exists {
@@ -65,6 +68,7 @@ func GetUserFeed(ctx context.Context, userID string, limit, kind int) ([]nostr.E
 		return nil, fmt.Errorf("feed generation failed after waiting for cache")
 	}
 
+	// Mark feed generation as in progress
 	pending := make(chan struct{})
 	pendingRequests[cacheKey] = pending
 	pendingRequestsMutex.Unlock()
@@ -76,26 +80,36 @@ func GetUserFeed(ctx context.Context, userID string, limit, kind int) ([]nostr.E
 		pendingRequestsMutex.Unlock()
 	}()
 
+	// Generate the feed
 	log.Println("No cache or pending request found, generating feed variants for user:", userID, "kind:", kind)
 	authorFeed, err := repository.GetUserFeedByAuthors(ctx, userID, variantFeedSize*numFeedVariants, kind)
 	if err != nil {
 		return nil, err
 	}
 
+	// Fetch viral notes
 	viralNoteCacheMutex.Lock()
 	viralFeed := viralNoteCache.notes
 	viralNoteCacheMutex.Unlock()
 
-	kinds := []int{kind}
-	feedVariants := generateFeedVariants(authorFeed, viralFeed, variantFeedSize, kinds)
+	// Generate feed variants
+	feedVariants := generateFeedVariants(authorFeed, viralFeed, variantFeedSize, kind)
 
-	cachedFeeds := CachedFeeds{
-		Feeds:           feedVariants,
-		Timestamp:       now,
-		LastServedIndex: -1,
+	// Retrieve existing cached feeds or create a new one
+	cachedFeeds, _ := getCachedUserFeeds(userID, kind)
+	if cachedFeeds.Feeds == nil {
+		cachedFeeds.Feeds = make(map[int][][]FeedNote)
 	}
-	storeCachedUserFeeds(userID, kind, cachedFeeds)
 
+	// Update cached feeds for this kind
+	cachedFeeds.Feeds[kind] = feedVariants
+	cachedFeeds.Timestamp = now
+	cachedFeeds.LastServedIndex = -1
+
+	// Store the updated cached feeds
+	storeCachedUserFeeds(userID, kind, feedVariants, &cachedFeeds)
+
+	// Serve the sequential feed result
 	return serveSequentialFeedResult(userID, kind, cachedFeeds, limit), nil
 }
 
@@ -107,9 +121,14 @@ func getCachedUserFeeds(userID string, kind int) (CachedFeeds, bool) {
 	return CachedFeeds{}, false
 }
 
-func storeCachedUserFeeds(userID string, kind int, cachedFeeds CachedFeeds) {
-	cacheKey := getCacheKey(userID, kind)
-	userFeedCache.Store(cacheKey, cachedFeeds)
+func storeCachedUserFeeds(userID string, kind int, feedVariants [][]FeedNote, cachedFeeds *CachedFeeds) {
+	if cachedFeeds.Feeds == nil {
+		cachedFeeds.Feeds = make(map[int][][]FeedNote)
+	}
+	cachedFeeds.Feeds[kind] = feedVariants
+	cachedFeeds.Timestamp = time.Now()
+	log.Printf("Cached feed variants for kind %d for user: %s", kind, userID)
+	userFeedCache.Store(userID, cachedFeeds)
 }
 
 func serveSequentialFeedResult(userID string, kind int, cachedFeeds CachedFeeds, limit int) []nostr.Event {
@@ -124,9 +143,9 @@ func serveSequentialFeedResult(userID string, kind int, cachedFeeds CachedFeeds,
 	nextIndex := (cachedFeeds.LastServedIndex + 1) % len(feedVariants)
 	selectedFeed := feedVariants[nextIndex]
 
-	// Update LastServedIndex in the cache for the given kind
+	// Update LastServedIndex for the given kind
 	cachedFeeds.LastServedIndex = nextIndex
-	storeCachedUserFeeds(userID, kind, cachedFeeds)
+	storeCachedUserFeeds(userID, kind, feedVariants, &cachedFeeds)
 
 	// Convert the selected feed to nostr.Event results, applying the limit
 	var result []nostr.Event
@@ -141,86 +160,87 @@ func serveSequentialFeedResult(userID string, kind int, cachedFeeds CachedFeeds,
 	return result
 }
 
-func generateFeedVariants(authorFeed, viralFeed []FeedNote, variantSize int, kinds []int) map[int][][]FeedNote {
-	// Create a map to store feed variants for each kind
-	feedVariantsByKind := make(map[int][][]FeedNote)
+func shuffleNotes(notes []FeedNote) {
+	rand.Shuffle(len(notes), func(i, j int) {
+		notes[i], notes[j] = notes[j], notes[i]
+	})
+}
 
-	for _, kind := range kinds {
-		// Filter author feed and viral feed by kind
-		var filteredAuthorFeed []FeedNote
-		var filteredViralFeed []FeedNote
+func generateFeedVariants(authorFeed, viralFeed []FeedNote, variantSize int, kind int) [][]FeedNote {
+	// Filter author feed and viral feed by the specified kind
+	var filteredAuthorFeed []FeedNote
+	var filteredViralFeed []FeedNote
 
-		for _, note := range authorFeed {
-			if note.Event.Kind == kind {
-				filteredAuthorFeed = append(filteredAuthorFeed, note)
-			}
+	for _, note := range authorFeed {
+		if note.Event.Kind == kind {
+			filteredAuthorFeed = append(filteredAuthorFeed, note)
 		}
-
-		for _, note := range viralFeed {
-			if note.Event.Kind == kind {
-				filteredViralFeed = append(filteredViralFeed, note)
-			}
-		}
-
-		// Group notes by author
-		authorNotes := make(map[string][]FeedNote)
-		for _, note := range filteredAuthorFeed {
-			authorID := note.Event.PubKey
-			authorNotes[authorID] = append(authorNotes[authorID], note)
-		}
-
-		// Generate multiple feed variants with one note per author in each
-		var feedVariants [][]FeedNote
-		for i := 0; i < numFeedVariants; i++ {
-			var feed []FeedNote
-			usedAuthors := make(map[string]bool)
-
-			// Add author notes for the variant
-			for _, notes := range authorNotes {
-				if len(notes) > i {
-					// Use a different note from this author in each variant, if available
-					feed = append(feed, notes[i])
-				} else {
-					// If not enough unique notes, wrap around to use existing ones
-					feed = append(feed, notes[i%len(notes)])
-				}
-				usedAuthors[notes[0].Event.PubKey] = true
-			}
-
-			// Add viral notes, ensuring no duplicate authors
-			for _, viralNote := range filteredViralFeed {
-				if len(feed) >= variantSize {
-					break
-				}
-				authorID := viralNote.Event.PubKey
-				if !usedAuthors[authorID] {
-					feed = append(feed, viralNote)
-					usedAuthors[authorID] = true
-				}
-			}
-
-			// Sort each feed by score in descending order and truncate to variant size
-			sort.Slice(feed, func(i, j int) bool {
-				return feed[i].Score > feed[j].Score
-			})
-			if len(feed) > variantSize {
-				feed = feed[:variantSize]
-			}
-			feedVariants = append(feedVariants, feed)
-		}
-
-		// Store feed variants for the current kind
-		feedVariantsByKind[kind] = feedVariants
 	}
 
-	log.Printf("Generated feed variants for kinds %v, each with %d notes per variant", kinds, variantSize)
-	return feedVariantsByKind
+	for _, note := range viralFeed {
+		if note.Event.Kind == kind {
+			filteredViralFeed = append(filteredViralFeed, note)
+		}
+	}
+
+	// Group notes by author
+	authorNotes := make(map[string][]FeedNote)
+	for _, note := range filteredAuthorFeed {
+		authorID := note.Event.PubKey
+		authorNotes[authorID] = append(authorNotes[authorID], note)
+	}
+
+	// Initialize feed variants
+	feedVariants := make([][]FeedNote, numFeedVariants)
+	for i := range feedVariants {
+		feedVariants[i] = []FeedNote{}
+	}
+
+	// Distribute one note per author across all variants
+	for _, notes := range authorNotes {
+		for i := 0; i < len(notes) && i < numFeedVariants; i++ {
+			if len(feedVariants[i]) < variantSize {
+				feedVariants[i] = append(feedVariants[i], notes[i])
+			}
+		}
+	}
+
+	// Add viral notes to variants while ensuring no duplicate authors
+	usedAuthors := make(map[string]bool)
+	for i := 0; i < numFeedVariants; i++ {
+		for _, viralNote := range filteredViralFeed {
+			if len(feedVariants[i]) >= variantSize {
+				break
+			}
+			authorID := viralNote.Event.PubKey
+			if !usedAuthors[authorID] {
+				feedVariants[i] = append(feedVariants[i], viralNote)
+				usedAuthors[authorID] = true
+			}
+		}
+	}
+
+	// Sort each feed by score in descending order and truncate to variant size
+	for i := range feedVariants {
+		sort.Slice(feedVariants[i], func(a, b int) bool {
+			return feedVariants[i][a].Score > feedVariants[i][b].Score
+		})
+		if len(feedVariants[i]) > variantSize {
+			feedVariants[i] = feedVariants[i][:variantSize]
+		}
+	}
+
+	log.Printf("Generated %d feed variants for kind %d, each with up to %d notes", numFeedVariants, kind, variantSize)
+	return feedVariants
 }
+
 func (r *NostrRepository) GetUserFeedByAuthors(ctx context.Context, userID string, limit, kind int) ([]FeedNote, error) {
 	authorInteractions, err := r.fetchTopInteractedAuthors(userID)
 	if err != nil {
 		return nil, err
 	}
+
+	fmt.Println("Fetched top interacted authors:", len(authorInteractions))
 
 	notes, err := r.fetchNotesFromAuthors(authorInteractions, kind)
 	if err != nil {

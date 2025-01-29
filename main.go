@@ -246,7 +246,7 @@ func loadEnv() {
 }
 
 func purgeData(months int) {
-	ticker := time.NewTicker(24 * time.Second)
+	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
 
 	for {
