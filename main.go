@@ -185,8 +185,16 @@ func main() {
 				limit = 50
 			}
 
-			events, err := GetUserFeed(ctx, authenticatedUser, limit, copyFilter.Kinds[0])
-			fmt.Println("getting events of kind:", copyFilter.Kinds[0])
+			kinds := copyFilter.Kinds
+			var kind int
+			if len(kinds) == 0 {
+				kind = nostr.KindTextNote
+			} else {
+				kind = kinds[0]
+			}
+
+			events, err := GetUserFeed(ctx, authenticatedUser, limit, kind)
+			fmt.Println("getting events of kind:", kind)
 			if err != nil {
 				log.Println("Error fetching most reacted posts:", err)
 				return
