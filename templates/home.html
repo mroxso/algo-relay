@@ -5,14 +5,44 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AlgoRelay</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #1e3a8a, #6b7280, #e5e7eb);
+            background-attachment: fixed;
+        }
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+    </style>
 </head>
-<body class="flex flex-col items-center justify-center min-h-screen bg-gray-100 text-gray-900">
-    <main class="text-center">
-        <h1 class="text-4xl font-bold">AlgoRelay</h1>
-        <h2 class="text-xl text-gray-600 mt-2">Nostr's first algorithmic relay</h2>
+<body class="flex flex-col items-center justify-center min-h-screen text-white">
+    <main class="text-center p-8 rounded-xl glass-effect shadow-lg max-w-md mx-4">
+        <h1 class="text-5xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-300 to-blue-500">
+            AlgoRelay
+        </h1>
+        <h2 class="text-xl mt-3 text-gray-200 font-light">
+            Nostr's first algorithmic relay
+        </h2>
+        <div class="mt-6 space-y-4">
+            <p class="text-gray-300">
+                Discover AlgoRelay implementations:
+            </p>
+            <div class="flex justify-center gap-4">
+                <a href="https://jumble.social/?r=algo.utxo.one" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition duration-300">
+                    Jumble Social
+                </a>
+                <a href="https://coracle.social" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition duration-300">
+                    Coracle Social
+                </a>
+            </div>
+        </div>
     </main>
     <footer class="mt-10">
-        <a href="https://github.com/bitvora/algo-relay" class="text-blue-500 hover:underline">GitHub</a>
+        <a href="https://github.com/bitvora/algo-relay" class="text-indigo-300 hover:text-indigo-100 transition duration-300">
+            GitHub
+        </a>
     </footer>
 </body>
 </html>
