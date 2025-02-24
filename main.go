@@ -217,17 +217,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
 	mux.HandleFunc("/", handleHomePage)
 
-
 	log.Printf("listening at http://0.0.0.0:3334")
 	http.ListenAndServe("0.0.0.0:3334", relay)
-}
-
-func handleHomePage(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "https://jumble.social/?r=algo.utxo.one", http.StatusSeeOther)
 }
 
 func subscribeAll() {
