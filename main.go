@@ -139,17 +139,17 @@ func main() {
 
 	relay.RejectConnection = append(relay.RejectConnection,
 		policies.ConnectionRateLimiter(
-			3,
+			10,
 			time.Minute*1,
-			3,
+			10,
 		),
 	)
 
 	relay.RejectFilter = append(relay.RejectFilter,
 		policies.FilterIPRateLimiter(
-			3,
+			10,
 			time.Second*10,
-			3,
+			10,
 		),
 	)
 
@@ -209,11 +209,17 @@ func main() {
 	})
 
 	log.Println("🚀 Relay started on port 3334")
+	mux := relay.Router()
+	mux.HandleFunc("/", handleHomePage)
 	err = http.ListenAndServe(":3334", relay)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+}
+
+func handleHomePage(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "https://jumble.social/?r=algo.utxo.one", http.StatusSeeOther)
 }
 
 func subscribeAll() {
