@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"math/rand/v2"
 	"os"
 	"sort"
 	"strconv"
@@ -127,47 +126,39 @@ func storeCachedUserFeeds(userID string, kind int, feedVariants [][]FeedNote, ca
 	}
 	cachedFeeds.Feeds[kind] = feedVariants
 	cachedFeeds.Timestamp = time.Now()
-	log.Printf("Cached feed variants for kind %d for user: %s", kind, userID)
-	userFeedCache.Store(userID, cachedFeeds)
+
+	cacheKey := getCacheKey(userID, kind)
+	log.Printf("Caching feed variants for key: %s (kind %d) for user: %s", cacheKey, kind, userID)
+	userFeedCache.Store(cacheKey, *cachedFeeds)
 }
 
 func serveSequentialFeedResult(userID string, kind int, cachedFeeds CachedFeeds, limit int) []nostr.Event {
-	// Check if there are feed variants for the given kind
+	cacheKey := getCacheKey(userID, kind)
+
 	feedVariants, ok := cachedFeeds.Feeds[kind]
 	if !ok || len(feedVariants) == 0 {
 		log.Printf("No feed variants available for user: %s, kind: %d", userID, kind)
 		return nil
 	}
 
-	// Determine the next feed variant to serve
 	nextIndex := (cachedFeeds.LastServedIndex + 1) % len(feedVariants)
 	selectedFeed := feedVariants[nextIndex]
-
-	// Update LastServedIndex for the given kind
 	cachedFeeds.LastServedIndex = nextIndex
-	storeCachedUserFeeds(userID, kind, feedVariants, &cachedFeeds)
+	userFeedCache.Store(cacheKey, cachedFeeds)
 
-	// Convert the selected feed to nostr.Event results, applying the limit
 	var result []nostr.Event
 	for i, feedNote := range selectedFeed {
 		if i >= limit {
 			break
 		}
-		result = append(result, feedNote.Event) // Ensure FeedNote has an Event field
+		result = append(result, feedNote.Event)
 	}
 
 	log.Printf("Serving feed variant %d with %d notes (limit %d, kind %d) for user: %s", nextIndex, len(result), limit, kind, userID)
 	return result
 }
 
-func shuffleNotes(notes []FeedNote) {
-	rand.Shuffle(len(notes), func(i, j int) {
-		notes[i], notes[j] = notes[j], notes[i]
-	})
-}
-
 func generateFeedVariants(authorFeed, viralFeed []FeedNote, variantSize int, kind int) [][]FeedNote {
-	// Filter author feed and viral feed by the specified kind
 	var filteredAuthorFeed []FeedNote
 	var filteredViralFeed []FeedNote
 

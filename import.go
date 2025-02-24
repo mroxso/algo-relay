@@ -12,7 +12,7 @@ const layout = "2006-01-02"
 
 func importNotes(kind int) {
 	ctx := context.Background()
-	startDate := time.Now().Add(-30 * 24 * time.Hour)
+	startDate := time.Now().Add(-3 * 24 * time.Hour)
 	startTime, _ := time.Parse(layout, startDate.Format(layout))
 	endTime := startTime.Add(24 * time.Hour)
 
