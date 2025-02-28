@@ -279,6 +279,13 @@
             document.getElementById('algorithm-form').addEventListener('submit', async function(e) {
                 e.preventDefault();
                 
+                const pubkey = localStorage.getItem('nostr_pubkey');
+                if (!pubkey) {
+                    alert('You need to be logged in to save settings');
+                    window.location.href = '/';
+                    return;
+                }
+                
                 const settings = {
                     pubkey: pubkey,
                     authorInteractions: parseFloat(document.getElementById('author-interactions').value),
@@ -292,12 +299,52 @@
                 };
                 
                 try {
+                    // Check if Nostr extension is available
+                    if (!window.nostr) {
+                        alert('Nostr extension not found. Please install a Nostr extension to save settings.');
+                        return;
+                    }
+                    
+                    // Create event content with the settings
+                    const eventContent = JSON.stringify({
+                        type: 'algo_relay_settings',
+                        settings: settings,
+                        timestamp: Math.floor(Date.now() / 1000)
+                    });
+                    
+                    // Create the event object
+                    const event = {
+                        kind: 1,
+                        created_at: Math.floor(Date.now() / 1000),
+                        tags: [['t', 'algo_relay_settings']],
+                        content: eventContent,
+                        pubkey: pubkey
+                    };
+                    
+                    // Sign the event using the Nostr extension
+                    let signedEvent;
+                    try {
+                        // Get the event ID
+                        const nostr = window.NostrTools || window.nostr;
+                        
+                        // This is how it's done in home.html - we need to use window.nostr directly
+                        signedEvent = await window.nostr.signEvent(event);
+                    } catch (error) {
+                        console.error('Error signing event:', error);
+                        alert('Error signing with your Nostr extension. Please try again.');
+                        return;
+                    }
+                    
+                    // Send both the settings and the signed event to verify ownership
                     const response = await fetch('/api/settings', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify(settings)
+                        body: JSON.stringify({
+                            settings: settings,
+                            signedEvent: signedEvent
+                        })
                     });
                     
                     if (response.ok) {

@@ -154,6 +154,12 @@ func sendAuthResponse(w http.ResponseWriter, success bool, errorMsg string) {
 	}
 }
 
+// SettingsRequest represents the combined settings and signed event
+type SettingsRequest struct {
+	Settings    UserSettings     `json:"settings"`
+	SignedEvent NostrAuthRequest `json:"signedEvent"`
+}
+
 // handleUserSettings handles saving and retrieving user algorithm settings
 func handleUserSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -179,26 +185,66 @@ func handleUserSettings(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		// Save user settings
-		var settings UserSettings
-		if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		var settingsReq SettingsRequest
+		if err := json.NewDecoder(r.Body).Decode(&settingsReq); err != nil {
 			http.Error(w, "Invalid request format: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		// Validate pubkey
-		if settings.PubKey == "" {
+		if settingsReq.Settings.PubKey == "" {
 			http.Error(w, "Missing pubkey in settings", http.StatusBadRequest)
 			return
 		}
 
+		// Verify the signature of the event
+		nostrTags := nostr.Tags{}
+		for _, tag := range settingsReq.SignedEvent.Tags {
+			nostrTags = append(nostrTags, nostr.Tag(tag))
+		}
+
+		event := &nostr.Event{
+			ID:        settingsReq.SignedEvent.ID,
+			PubKey:    settingsReq.SignedEvent.PubKey,
+			CreatedAt: nostr.Timestamp(settingsReq.SignedEvent.CreatedAt),
+			Kind:      settingsReq.SignedEvent.Kind,
+			Tags:      nostrTags,
+			Content:   settingsReq.SignedEvent.Content,
+			Sig:       settingsReq.SignedEvent.Sig,
+		}
+
+		// Verify the signature
+		ok, err := event.CheckSignature()
+		if err != nil {
+			http.Error(w, "Error verifying signature: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		if !ok {
+			http.Error(w, "Invalid signature", http.StatusUnauthorized)
+			return
+		}
+
+		// Check if the pubkey in the event matches the pubkey in the settings
+		if event.PubKey != settingsReq.Settings.PubKey {
+			http.Error(w, "Pubkey mismatch between signed event and settings", http.StatusUnauthorized)
+			return
+		}
+
+		// Check if the event is recent (within the last 5 minutes)
+		eventTime := time.Unix(settingsReq.SignedEvent.CreatedAt, 0)
+		if time.Since(eventTime) > 5*time.Minute {
+			http.Error(w, "Authentication event is too old", http.StatusUnauthorized)
+			return
+		}
+
 		// Validate settings values
-		if err := validateSettings(settings); err != nil {
+		if err := validateSettings(settingsReq.Settings); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		// Save settings
-		if err := repository.SaveUserSettings(settings); err != nil {
+		if err := repository.SaveUserSettings(settingsReq.Settings); err != nil {
 			http.Error(w, "Error saving settings: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
