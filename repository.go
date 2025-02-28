@@ -45,6 +45,19 @@ var viralNoteCacheMutex sync.Mutex
 
 const PubkeyLength = 64
 
+// UserSettings represents the algorithm settings for a specific user
+type UserSettings struct {
+	PubKey             string  `json:"pubkey"`
+	AuthorInteractions float64 `json:"authorInteractions"`
+	GlobalComments     float64 `json:"globalComments"`
+	GlobalReactions    float64 `json:"globalReactions"`
+	GlobalZaps         float64 `json:"globalZaps"`
+	Recency            float64 `json:"recency"`
+	DecayRate          float64 `json:"decayRate"`
+	ViralThreshold     float64 `json:"viralThreshold"`
+	ViralDampening     float64 `json:"viralDampening"`
+}
+
 func NewNostrRepository(db *sql.DB) *NostrRepository {
 	return &NostrRepository{db: db}
 }
@@ -286,7 +299,7 @@ func (r *NostrRepository) GetViralnotes(ctx context.Context, limit int) ([]FeedN
 			continue
 		}
 
-		recencyFactor := calculateRecencyFactor(event.CreatedAt.Time())
+		recencyFactor := calculateRecencyFactorWithDecay(event.CreatedAt.Time(), decayRate)
 		score := (float64(commentCount)*weightCommentsGlobal +
 			float64(reactionCount)*weightReactionsGlobal +
 			float64(zapCount)*weightZapsGlobal +
@@ -577,4 +590,68 @@ func (r *NostrRepository) PurgeZapsOlderThan(months int) error {
 	rowsAffected, _ := result.RowsAffected()
 	fmt.Printf("Purged %d zaps older than %d months\n", rowsAffected, months)
 	return nil
+}
+
+// SaveUserSettings saves or updates a user's algorithm settings
+func (r *NostrRepository) SaveUserSettings(settings UserSettings) error {
+	// Convert settings to JSON
+	settingsJSON, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("error marshaling settings: %v", err)
+	}
+
+	query := `
+		INSERT INTO pubkey_settings (pubkey, settings)
+		VALUES ($1, $2)
+		ON CONFLICT (pubkey) DO UPDATE SET
+			settings = $2
+	`
+
+	_, err = r.db.ExecContext(
+		context.Background(),
+		query,
+		settings.PubKey,
+		settingsJSON,
+	)
+
+	return err
+}
+
+// GetUserSettings retrieves a user's algorithm settings or returns default settings if none exist
+func (r *NostrRepository) GetUserSettings(pubkey string) (UserSettings, error) {
+	query := `
+		SELECT settings
+		FROM pubkey_settings
+		WHERE pubkey = $1
+	`
+
+	var settingsJSON []byte
+	err := r.db.QueryRowContext(context.Background(), query, pubkey).Scan(&settingsJSON)
+
+	if err == sql.ErrNoRows {
+		// Return default settings from environment variables
+		return UserSettings{
+			PubKey:             pubkey,
+			AuthorInteractions: weightInteractionsWithAuthor,
+			GlobalComments:     weightCommentsGlobal,
+			GlobalReactions:    weightReactionsGlobal,
+			GlobalZaps:         weightZapsGlobal,
+			Recency:            weightRecency,
+			DecayRate:          decayRate,
+			ViralThreshold:     viralThreshold,
+			ViralDampening:     viralNoteDampening,
+		}, nil
+	}
+
+	if err != nil {
+		return UserSettings{}, err
+	}
+
+	// Unmarshal the JSON settings
+	var settings UserSettings
+	if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+		return UserSettings{}, fmt.Errorf("error unmarshaling settings: %v", err)
+	}
+
+	return settings, nil
 }
