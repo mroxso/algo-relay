@@ -58,6 +58,14 @@ type UserSettings struct {
 	ViralDampening     float64 `json:"viralDampening"`
 }
 
+// UserMetrics represents the user's activity metrics on Nostr
+type UserMetrics struct {
+	NetworkSize   int `json:"networkSize"`   // Number of unique authors interacted with
+	Reactions     int `json:"reactions"`     // Number of reactions given
+	Conversations int `json:"conversations"` // Number of comments/replies made
+	Zaps          int `json:"zaps"`          // Number of zaps sent
+}
+
 func NewNostrRepository(db *sql.DB) *NostrRepository {
 	return &NostrRepository{db: db}
 }
@@ -654,4 +662,81 @@ func (r *NostrRepository) GetUserSettings(pubkey string) (UserSettings, error) {
 	}
 
 	return settings, nil
+}
+
+// GetUserMetrics retrieves activity metrics for a specific user
+func (r *NostrRepository) GetUserMetrics(pubkey string) (UserMetrics, error) {
+	// Get network size (unique authors interacted with)
+	networkSizeQuery := `
+		WITH author_interactions AS (
+			-- Authors of notes the user has reacted to
+			SELECT DISTINCT n.author_id
+			FROM notes n
+			JOIN reactions r ON n.id = r.note_id
+			WHERE r.reactor_id = $1
+			
+			UNION
+			
+			-- Authors of notes the user has commented on
+			SELECT DISTINCT n.author_id
+			FROM notes n
+			JOIN comments c ON n.id = c.note_id
+			WHERE c.commenter_id = $1
+			
+			UNION
+			
+			-- Authors of notes the user has zapped
+			SELECT DISTINCT n.author_id
+			FROM notes n
+			JOIN zaps z ON n.id = z.note_id
+			WHERE z.zapper_id = $1
+		)
+		SELECT COUNT(DISTINCT author_id) FROM author_interactions;
+	`
+
+	var networkSize int
+	err := r.db.QueryRowContext(context.Background(), networkSizeQuery, pubkey).Scan(&networkSize)
+	if err != nil {
+		return UserMetrics{}, fmt.Errorf("error fetching network size: %v", err)
+	}
+
+	// Get reactions count
+	reactionsQuery := `
+		SELECT COUNT(*) FROM reactions WHERE reactor_id = $1;
+	`
+
+	var reactions int
+	err = r.db.QueryRowContext(context.Background(), reactionsQuery, pubkey).Scan(&reactions)
+	if err != nil {
+		return UserMetrics{}, fmt.Errorf("error fetching reactions count: %v", err)
+	}
+
+	// Get conversations (comments) count
+	conversationsQuery := `
+		SELECT COUNT(*) FROM comments WHERE commenter_id = $1;
+	`
+
+	var conversations int
+	err = r.db.QueryRowContext(context.Background(), conversationsQuery, pubkey).Scan(&conversations)
+	if err != nil {
+		return UserMetrics{}, fmt.Errorf("error fetching conversations count: %v", err)
+	}
+
+	// Get zaps count
+	zapsQuery := `
+		SELECT COUNT(*) FROM zaps WHERE zapper_id = $1;
+	`
+
+	var zaps int
+	err = r.db.QueryRowContext(context.Background(), zapsQuery, pubkey).Scan(&zaps)
+	if err != nil {
+		return UserMetrics{}, fmt.Errorf("error fetching zaps count: %v", err)
+	}
+
+	return UserMetrics{
+		NetworkSize:   networkSize,
+		Reactions:     reactions,
+		Conversations: conversations,
+		Zaps:          zaps,
+	}, nil
 }

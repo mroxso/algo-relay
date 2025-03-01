@@ -216,6 +216,7 @@ func main() {
 	mux.HandleFunc("/api/top-authors", handleTopAuthorsAPI)
 	mux.HandleFunc("/auth", handleAuth)
 	mux.HandleFunc("/api/settings", handleUserSettings)
+	mux.HandleFunc("/api/user-metrics", handleUserMetricsAPI)
 
 	err = http.ListenAndServe(":3334", relay)
 	if err != nil {

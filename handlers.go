@@ -284,3 +284,29 @@ func validateSettings(settings UserSettings) error {
 
 	return nil
 }
+
+// handleUserMetricsAPI handles requests for user metrics
+func handleUserMetricsAPI(w http.ResponseWriter, r *http.Request) {
+	// Get the user's pubkey from the request
+	pubkey := r.URL.Query().Get("pubkey")
+	if pubkey == "" {
+		http.Error(w, "Missing pubkey parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Fetch user metrics
+	metrics, err := repository.GetUserMetrics(pubkey)
+	if err != nil {
+		http.Error(w, "Error fetching user metrics: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Set content type header
+	w.Header().Set("Content-Type", "application/json")
+
+	// Return the metrics as JSON
+	if err := json.NewEncoder(w).Encode(metrics); err != nil {
+		http.Error(w, "Error encoding response: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
