@@ -42,28 +42,6 @@
         </div>
     </header>
 
-    <!-- Login Modal -->
-    <div id="login-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-20 hidden">
-        <div class="glass-effect p-8 rounded-xl max-w-md w-full">
-            <h2 class="text-2xl font-bold text-purple-300 mb-4">Login with Nostr</h2>
-            <p class="text-gray-300 mb-6">Please sign in using your Nostr extension or provide your public key.</p>
-            
-            <div class="mb-4">
-                <label for="pubkey-input" class="block text-sm font-medium text-gray-300 mb-2">Public Key (hex)</label>
-                <input type="text" id="pubkey-input" class="w-full p-2 bg-gray-800 border border-gray-700 rounded-lg text-white">
-            </div>
-            
-            <div class="flex justify-between">
-                <button id="cancel-login" class="px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition duration-300">
-                    Cancel
-                </button>
-                <button id="confirm-login" class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition duration-300 purple-glow">
-                    Login
-                </button>
-            </div>
-        </div>
-    </div>
-
     <!-- Hero Section -->
     <section class="max-w-7xl mx-auto text-center py-20 px-4">
         <h2 class="text-4xl md:text-6xl font-bold text-purple-300 leading-tight">
@@ -176,97 +154,63 @@
         // Nostr login functionality
         document.addEventListener('DOMContentLoaded', function() {
             const loginButton = document.getElementById('login-button');
-            const loginModal = document.getElementById('login-modal');
-            const cancelLogin = document.getElementById('cancel-login');
-            const confirmLogin = document.getElementById('confirm-login');
-            const pubkeyInput = document.getElementById('pubkey-input');
             
             // Check if user is already logged in
             const storedPubkey = localStorage.getItem('nostr_pubkey');
             if (storedPubkey) {
                 loginButton.textContent = 'Go to Dashboard';
                 loginButton.addEventListener('click', () => {
-                    window.location.href = '/dashboard';
+                    window.location.href = '/dashboard.html';
                 });
             } else {
-                // Show login modal when login button is clicked
-                loginButton.addEventListener('click', () => {
-                    loginModal.classList.remove('hidden');
-                });
-            }
-            
-            // Hide modal when cancel is clicked
-            cancelLogin.addEventListener('click', () => {
-                loginModal.classList.add('hidden');
-            });
-            
-            // Handle login confirmation
-            confirmLogin.addEventListener('click', async () => {
-                try {
-                    let pubkey;
-                    
-                    // Try to use NIP-07 extension if available
-                    if (window.nostr) {
-                        pubkey = await window.nostr.getPublicKey();
-                    } else {
-                        // Otherwise use the manually entered pubkey
-                        pubkey = pubkeyInput.value.trim();
-                        if (!pubkey) {
-                            alert('Please enter a public key or use a Nostr extension');
+                // Direct login with Nostr extension when login button is clicked
+                loginButton.addEventListener('click', async () => {
+                    try {
+                        // Check if Nostr extension is available
+                        if (!window.nostr) {
+                            alert('Nostr extension not found. Please install a Nostr extension like nos2x or Alby.');
                             return;
                         }
-                    }
-                    
-                    // Create a signed event to prove ownership of the pubkey
-                    const event = {
-                        kind: 1,
-                        created_at: Math.floor(Date.now() / 1000),
-                        tags: [],
-                        content: 'Logging in to AlgoRelay',
-                        pubkey: pubkey
-                    };
-                    
-                    let signedEvent;
-                    if (window.nostr) {
-                        signedEvent = await window.nostr.signEvent(event);
-                    } else {
-                        alert('Without a Nostr extension, we cannot verify your identity. Please install a Nostr extension.');
-                        return;
-                    }
-                    
-                    // Send the signed event to the server for verification
-                    const response = await fetch('/auth', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(signedEvent)
-                    });
-                    
-                    if (response.ok) {
-                        // Store the pubkey in localStorage
-                        localStorage.setItem('nostr_pubkey', pubkey);
                         
-                        // Redirect to dashboard
-                        window.location.href = '/dashboard.html';
-                    } else {
-                        const errorData = await response.json();
-                        alert(`Login failed: ${errorData.error || 'Unknown error'}`);
+                        // Get public key from extension
+                        const pubkey = await window.nostr.getPublicKey();
+                        
+                        // Create a signed event to prove ownership of the pubkey
+                        const event = {
+                            kind: 1,
+                            created_at: Math.floor(Date.now() / 1000),
+                            tags: [],
+                            content: 'Logging in to AlgoRelay',
+                            pubkey: pubkey
+                        };
+                        
+                        const signedEvent = await window.nostr.signEvent(event);
+                        
+                        // Send the signed event to the server for verification
+                        const response = await fetch('/auth', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(signedEvent)
+                        });
+                        
+                        if (response.ok) {
+                            // Store the pubkey in localStorage
+                            localStorage.setItem('nostr_pubkey', pubkey);
+                            
+                            // Redirect to dashboard
+                            window.location.href = '/dashboard.html';
+                        } else {
+                            const errorData = await response.json();
+                            alert(`Login failed: ${errorData.error || 'Unknown error'}`);
+                        }
+                    } catch (error) {
+                        console.error('Login error:', error);
+                        alert(`Login error: ${error.message}`);
                     }
-                } catch (error) {
-                    console.error('Login error:', error);
-                    alert(`Login error: ${error.message}`);
-                } finally {
-                    loginModal.classList.add('hidden');
-                }
-            });
-            
-            // Close modal if clicked outside
-            loginModal.addEventListener('click', (e) => {
-                if (e.target === loginModal) {
-                    loginModal.classList.add('hidden');
-                }
-            });
+                });
+            }
         });
     </script>
 </body>
