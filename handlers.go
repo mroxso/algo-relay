@@ -249,6 +249,9 @@ func handleUserSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Invalidate the user's feed cache
+		invalidateUserFeedCache(settingsReq.Settings.PubKey)
+
 		// Return success response
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]bool{"success": true})

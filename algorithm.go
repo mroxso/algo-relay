@@ -298,6 +298,20 @@ func (r *NostrRepository) calculateAuthorNoteScore(event EventWithMeta, interact
 	return score
 }
 
+// invalidateUserFeedCache removes all cached feeds for a user
+func invalidateUserFeedCache(userID string) {
+	log.Printf("Invalidating feed cache for user: %s", userID)
+
+	// We need to remove all kinds of feeds for this user
+	// Common kinds are 1 (text notes), 30023 (articles), 20 (images)
+	commonKinds := []int{1, 30023, 20}
+
+	for _, kind := range commonKinds {
+		cacheKey := getCacheKey(userID, kind)
+		userFeedCache.Delete(cacheKey)
+	}
+}
+
 // New function to calculate recency with custom decay rate
 func calculateRecencyFactorWithDecay(createdAt time.Time, decayRateValue float64) float64 {
 	hoursSinceCreation := time.Since(createdAt).Hours()
