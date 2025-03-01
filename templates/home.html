@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AlgoRelay - Empower Your Nostr Experience</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/nostr-tools/lib/nostr.bundle.min.js"></script>
     <style>
         body {
             background: linear-gradient(180deg, #1a1033, #2d1b5e, #3b2a7a);
@@ -26,11 +27,18 @@
 <body class="flex flex-col items-center min-h-screen text-gray-100">
     <!-- Header -->
     <header class="w-full py-6 bg-opacity-80 glass-effect sticky top-0 z-10">
-        <div class="max-w-7xl mx-auto text-center">
-            <h1 class="text-5xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-purple-600">
-                AlgoRelay
-            </h1>
-            <p class="text-xl mt-2 text-gray-300">Nostr’s First Algorithmic Relay</p>
+        <div class="max-w-7xl mx-auto flex justify-between items-center px-4">
+            <div>
+                <h1 class="text-5xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-purple-600">
+                    AlgoRelay
+                </h1>
+                <p class="text-xl mt-2 text-gray-300">Nostr's First Algorithmic Relay</p>
+            </div>
+            <div id="login-section">
+                <button id="login-button" class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition duration-300 purple-glow">
+                    Login with Nostr
+                </button>
+            </div>
         </div>
     </header>
 
@@ -63,7 +71,7 @@
         <div class="p-6 rounded-xl glass-effect">
             <h3 class="text-2xl font-semibold text-purple-300">You Control the Algorithm</h3>
             <p class="mt-3 text-gray-300">
-                Take the driver’s seat. Customize how your feed works with an algorithm that bends to your preferences, not a corporate agenda.
+                Take the driver's seat. Customize how your feed works with an algorithm that bends to your preferences, not a corporate agenda.
             </p>
         </div>
         <div class="p-6 rounded-xl glass-effect">
@@ -125,7 +133,7 @@
     <section class="max-w-7xl mx-auto py-20 px-4 text-center">
         <h2 class="text-4xl font-bold text-purple-300">Take Back Control</h2>
         <p class="text-lg mt-4 text-gray-400 max-w-xl mx-auto">
-            Empower your Nostr experience today with a relay that’s built for you.
+            Empower your Nostr experience today with a relay that's built for you.
         </p>
         <a href="https://github.com/bitvora/algo-relay" class="mt-6 inline-block px-8 py-4 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition duration-300 purple-glow">
             Get Started on GitHub
@@ -141,5 +149,69 @@
             </a>
         </div>
     </footer>
+
+    <script>
+        // Nostr login functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const loginButton = document.getElementById('login-button');
+            
+            // Check if user is already logged in
+            const storedPubkey = localStorage.getItem('nostr_pubkey');
+            if (storedPubkey) {
+                loginButton.textContent = 'Go to Dashboard';
+                loginButton.addEventListener('click', () => {
+                    window.location.href = '/dashboard.html';
+                });
+            } else {
+                // Direct login with Nostr extension when login button is clicked
+                loginButton.addEventListener('click', async () => {
+                    try {
+                        // Check if Nostr extension is available
+                        if (!window.nostr) {
+                            alert('Nostr extension not found. Please install a Nostr extension like nos2x or Alby.');
+                            return;
+                        }
+                        
+                        // Get public key from extension
+                        const pubkey = await window.nostr.getPublicKey();
+                        
+                        // Create a signed event to prove ownership of the pubkey
+                        const event = {
+                            kind: 1,
+                            created_at: Math.floor(Date.now() / 1000),
+                            tags: [],
+                            content: 'Logging in to AlgoRelay',
+                            pubkey: pubkey
+                        };
+                        
+                        const signedEvent = await window.nostr.signEvent(event);
+                        
+                        // Send the signed event to the server for verification
+                        const response = await fetch('/auth', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(signedEvent)
+                        });
+                        
+                        if (response.ok) {
+                            // Store the pubkey in localStorage
+                            localStorage.setItem('nostr_pubkey', pubkey);
+                            
+                            // Redirect to dashboard
+                            window.location.href = '/dashboard.html';
+                        } else {
+                            const errorData = await response.json();
+                            alert(`Login failed: ${errorData.error || 'Unknown error'}`);
+                        }
+                    } catch (error) {
+                        console.error('Login error:', error);
+                        alert(`Login error: ${error.message}`);
+                    }
+                });
+            }
+        });
+    </script>
 </body>
 </html>

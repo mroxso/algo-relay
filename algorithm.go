@@ -242,7 +242,7 @@ func (r *NostrRepository) GetUserFeedByAuthors(ctx context.Context, userID strin
 	var FeedNotes []FeedNote
 	for _, note := range notes {
 		interactionCount := getInteractionCountForAuthor(note.Event.PubKey, authorInteractions)
-		score := r.calculateAuthorNoteScore(note, interactionCount)
+		score := r.calculateAuthorNoteScore(note, interactionCount, userID)
 		FeedNotes = append(FeedNotes, FeedNote{Event: note.Event, Score: score})
 	}
 
@@ -263,22 +263,60 @@ func getInteractionCountForAuthor(authorID string, interactions []AuthorInteract
 	return 0
 }
 
-func (r *NostrRepository) calculateAuthorNoteScore(event EventWithMeta, interactionCount int) float64 {
-	recencyFactor := calculateRecencyFactor(event.CreatedAt)
+func (r *NostrRepository) calculateAuthorNoteScore(event EventWithMeta, interactionCount int, userID string) float64 {
+	// Get user settings
+	userSettings, err := r.GetUserSettings(userID)
 
-	score := float64(event.GlobalCommentsCount)*weightCommentsGlobal +
-		float64(event.GlobalReactionsCount)*weightReactionsGlobal +
-		float64(event.GlobalZapsCount)*weightZapsGlobal +
-		recencyFactor*weightRecency +
-		float64(interactionCount)*weightInteractionsWithAuthor
+	// Use user-specific weights if available, otherwise fall back to global weights
+	authorInteractionsWeight := weightInteractionsWithAuthor
+	commentsWeight := weightCommentsGlobal
+	reactionsWeight := weightReactionsGlobal
+	zapsWeight := weightZapsGlobal
+	recencyWeight := weightRecency
+	decayRateValue := decayRate
+
+	if err == nil {
+		// User has custom settings, use them
+		authorInteractionsWeight = userSettings.AuthorInteractions
+		commentsWeight = userSettings.GlobalComments
+		reactionsWeight = userSettings.GlobalReactions
+		zapsWeight = userSettings.GlobalZaps
+		recencyWeight = userSettings.Recency
+		decayRateValue = userSettings.DecayRate
+	}
+
+	// Calculate recency factor with potentially user-specific decay rate
+	recencyFactor := calculateRecencyFactorWithDecay(event.CreatedAt, decayRateValue)
+
+	// Calculate score using user-specific weights
+	score := float64(event.GlobalCommentsCount)*commentsWeight +
+		float64(event.GlobalReactionsCount)*reactionsWeight +
+		float64(event.GlobalZapsCount)*zapsWeight +
+		recencyFactor*recencyWeight +
+		float64(interactionCount)*authorInteractionsWeight
 
 	return score
 }
 
-func calculateRecencyFactor(createdAt time.Time) float64 {
+// invalidateUserFeedCache removes all cached feeds for a user
+func invalidateUserFeedCache(userID string) {
+	log.Printf("Invalidating feed cache for user: %s", userID)
+
+	// We need to remove all kinds of feeds for this user
+	// Common kinds are 1 (text notes), 30023 (articles), 20 (images)
+	commonKinds := []int{1, 30023, 20}
+
+	for _, kind := range commonKinds {
+		cacheKey := getCacheKey(userID, kind)
+		userFeedCache.Delete(cacheKey)
+	}
+}
+
+// New function to calculate recency with custom decay rate
+func calculateRecencyFactorWithDecay(createdAt time.Time, decayRateValue float64) float64 {
 	hoursSinceCreation := time.Since(createdAt).Hours()
 	scalingFactor := 100.0
-	recencyFactor := math.Exp(-decayRate*hoursSinceCreation) * scalingFactor
+	recencyFactor := math.Exp(-decayRateValue*hoursSinceCreation) * scalingFactor
 
 	if recencyFactor > 1.0 {
 		recencyFactor = 1.0

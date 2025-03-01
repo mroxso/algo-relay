@@ -45,6 +45,27 @@ var viralNoteCacheMutex sync.Mutex
 
 const PubkeyLength = 64
 
+// UserSettings represents the algorithm settings for a specific user
+type UserSettings struct {
+	PubKey             string  `json:"pubkey"`
+	AuthorInteractions float64 `json:"authorInteractions"`
+	GlobalComments     float64 `json:"globalComments"`
+	GlobalReactions    float64 `json:"globalReactions"`
+	GlobalZaps         float64 `json:"globalZaps"`
+	Recency            float64 `json:"recency"`
+	DecayRate          float64 `json:"decayRate"`
+	ViralThreshold     float64 `json:"viralThreshold"`
+	ViralDampening     float64 `json:"viralDampening"`
+}
+
+// UserMetrics represents the user's activity metrics on Nostr
+type UserMetrics struct {
+	NetworkSize   int `json:"networkSize"`   // Number of unique authors interacted with
+	Reactions     int `json:"reactions"`     // Number of reactions given
+	Conversations int `json:"conversations"` // Number of comments/replies made
+	Zaps          int `json:"zaps"`          // Number of zaps sent
+}
+
 func NewNostrRepository(db *sql.DB) *NostrRepository {
 	return &NostrRepository{db: db}
 }
@@ -286,7 +307,7 @@ func (r *NostrRepository) GetViralnotes(ctx context.Context, limit int) ([]FeedN
 			continue
 		}
 
-		recencyFactor := calculateRecencyFactor(event.CreatedAt.Time())
+		recencyFactor := calculateRecencyFactorWithDecay(event.CreatedAt.Time(), decayRate)
 		score := (float64(commentCount)*weightCommentsGlobal +
 			float64(reactionCount)*weightReactionsGlobal +
 			float64(zapCount)*weightZapsGlobal +
@@ -577,4 +598,145 @@ func (r *NostrRepository) PurgeZapsOlderThan(months int) error {
 	rowsAffected, _ := result.RowsAffected()
 	fmt.Printf("Purged %d zaps older than %d months\n", rowsAffected, months)
 	return nil
+}
+
+// SaveUserSettings saves or updates a user's algorithm settings
+func (r *NostrRepository) SaveUserSettings(settings UserSettings) error {
+	// Convert settings to JSON
+	settingsJSON, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("error marshaling settings: %v", err)
+	}
+
+	query := `
+		INSERT INTO pubkey_settings (pubkey, settings)
+		VALUES ($1, $2)
+		ON CONFLICT (pubkey) DO UPDATE SET
+			settings = $2
+	`
+
+	_, err = r.db.ExecContext(
+		context.Background(),
+		query,
+		settings.PubKey,
+		settingsJSON,
+	)
+
+	return err
+}
+
+// GetUserSettings retrieves a user's algorithm settings or returns default settings if none exist
+func (r *NostrRepository) GetUserSettings(pubkey string) (UserSettings, error) {
+	query := `
+		SELECT settings
+		FROM pubkey_settings
+		WHERE pubkey = $1
+	`
+
+	var settingsJSON []byte
+	err := r.db.QueryRowContext(context.Background(), query, pubkey).Scan(&settingsJSON)
+
+	if err == sql.ErrNoRows {
+		// Return default settings from environment variables
+		return UserSettings{
+			PubKey:             pubkey,
+			AuthorInteractions: weightInteractionsWithAuthor,
+			GlobalComments:     weightCommentsGlobal,
+			GlobalReactions:    weightReactionsGlobal,
+			GlobalZaps:         weightZapsGlobal,
+			Recency:            weightRecency,
+			DecayRate:          decayRate,
+			ViralThreshold:     viralThreshold,
+			ViralDampening:     viralNoteDampening,
+		}, nil
+	}
+
+	if err != nil {
+		return UserSettings{}, err
+	}
+
+	// Unmarshal the JSON settings
+	var settings UserSettings
+	if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+		return UserSettings{}, fmt.Errorf("error unmarshaling settings: %v", err)
+	}
+
+	return settings, nil
+}
+
+// GetUserMetrics retrieves activity metrics for a specific user
+func (r *NostrRepository) GetUserMetrics(pubkey string) (UserMetrics, error) {
+	// Get network size (unique authors interacted with)
+	networkSizeQuery := `
+		WITH author_interactions AS (
+			-- Authors of notes the user has reacted to
+			SELECT DISTINCT n.author_id
+			FROM notes n
+			JOIN reactions r ON n.id = r.note_id
+			WHERE r.reactor_id = $1
+			
+			UNION
+			
+			-- Authors of notes the user has commented on
+			SELECT DISTINCT n.author_id
+			FROM notes n
+			JOIN comments c ON n.id = c.note_id
+			WHERE c.commenter_id = $1
+			
+			UNION
+			
+			-- Authors of notes the user has zapped
+			SELECT DISTINCT n.author_id
+			FROM notes n
+			JOIN zaps z ON n.id = z.note_id
+			WHERE z.zapper_id = $1
+		)
+		SELECT COUNT(DISTINCT author_id) FROM author_interactions;
+	`
+
+	var networkSize int
+	err := r.db.QueryRowContext(context.Background(), networkSizeQuery, pubkey).Scan(&networkSize)
+	if err != nil {
+		return UserMetrics{}, fmt.Errorf("error fetching network size: %v", err)
+	}
+
+	// Get reactions count
+	reactionsQuery := `
+		SELECT COUNT(*) FROM reactions WHERE reactor_id = $1;
+	`
+
+	var reactions int
+	err = r.db.QueryRowContext(context.Background(), reactionsQuery, pubkey).Scan(&reactions)
+	if err != nil {
+		return UserMetrics{}, fmt.Errorf("error fetching reactions count: %v", err)
+	}
+
+	// Get conversations (comments) count
+	conversationsQuery := `
+		SELECT COUNT(*) FROM comments WHERE commenter_id = $1;
+	`
+
+	var conversations int
+	err = r.db.QueryRowContext(context.Background(), conversationsQuery, pubkey).Scan(&conversations)
+	if err != nil {
+		return UserMetrics{}, fmt.Errorf("error fetching conversations count: %v", err)
+	}
+
+	// Get zaps count
+	zapsQuery := `
+		SELECT COUNT(*) FROM zaps WHERE zapper_id = $1;
+	`
+
+	var zaps int
+	err = r.db.QueryRowContext(context.Background(), zapsQuery, pubkey).Scan(&zaps)
+	if err != nil {
+		return UserMetrics{}, fmt.Errorf("error fetching zaps count: %v", err)
+	}
+
+	return UserMetrics{
+		NetworkSize:   networkSize,
+		Reactions:     reactions,
+		Conversations: conversations,
+		Zaps:          zaps,
+	}, nil
 }
