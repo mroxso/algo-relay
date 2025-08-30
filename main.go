@@ -139,17 +139,17 @@ func main() {
 
 	relay.RejectConnection = append(relay.RejectConnection,
 		policies.ConnectionRateLimiter(
-			3,
+			10,
 			time.Minute*1,
-			3,
+			10,
 		),
 	)
 
 	relay.RejectFilter = append(relay.RejectFilter,
 		policies.FilterIPRateLimiter(
-			3,
+			10,
 			time.Second*10,
-			3,
+			10,
 		),
 	)
 
@@ -209,11 +209,25 @@ func main() {
 	})
 
 	log.Println("🚀 Relay started on port 3334")
+	mux := relay.Router()
+
+	mux.HandleFunc("/", handleHomePage)
+	mux.HandleFunc("/dashboard.html", handleDashboardPage)
+	mux.HandleFunc("/api/top-authors", handleTopAuthorsAPI)
+	mux.HandleFunc("/auth", handleAuth)
+	mux.HandleFunc("/api/settings", handleUserSettings)
+	mux.HandleFunc("/api/user-metrics", handleUserMetricsAPI)
+
 	err = http.ListenAndServe(":3334", relay)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
+	mux.HandleFunc("/", handleHomePage)
+
+	log.Printf("listening at http://0.0.0.0:3334")
+	http.ListenAndServe("0.0.0.0:3334", relay)
 }
 
 func subscribeAll() {

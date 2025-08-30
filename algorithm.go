@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"math/rand/v2"
 	"os"
 	"sort"
 	"strconv"
@@ -127,47 +126,39 @@ func storeCachedUserFeeds(userID string, kind int, feedVariants [][]FeedNote, ca
 	}
 	cachedFeeds.Feeds[kind] = feedVariants
 	cachedFeeds.Timestamp = time.Now()
-	log.Printf("Cached feed variants for kind %d for user: %s", kind, userID)
-	userFeedCache.Store(userID, cachedFeeds)
+
+	cacheKey := getCacheKey(userID, kind)
+	log.Printf("Caching feed variants for key: %s (kind %d) for user: %s", cacheKey, kind, userID)
+	userFeedCache.Store(cacheKey, *cachedFeeds)
 }
 
 func serveSequentialFeedResult(userID string, kind int, cachedFeeds CachedFeeds, limit int) []nostr.Event {
-	// Check if there are feed variants for the given kind
+	cacheKey := getCacheKey(userID, kind)
+
 	feedVariants, ok := cachedFeeds.Feeds[kind]
 	if !ok || len(feedVariants) == 0 {
 		log.Printf("No feed variants available for user: %s, kind: %d", userID, kind)
 		return nil
 	}
 
-	// Determine the next feed variant to serve
 	nextIndex := (cachedFeeds.LastServedIndex + 1) % len(feedVariants)
 	selectedFeed := feedVariants[nextIndex]
-
-	// Update LastServedIndex for the given kind
 	cachedFeeds.LastServedIndex = nextIndex
-	storeCachedUserFeeds(userID, kind, feedVariants, &cachedFeeds)
+	userFeedCache.Store(cacheKey, cachedFeeds)
 
-	// Convert the selected feed to nostr.Event results, applying the limit
 	var result []nostr.Event
 	for i, feedNote := range selectedFeed {
 		if i >= limit {
 			break
 		}
-		result = append(result, feedNote.Event) // Ensure FeedNote has an Event field
+		result = append(result, feedNote.Event)
 	}
 
 	log.Printf("Serving feed variant %d with %d notes (limit %d, kind %d) for user: %s", nextIndex, len(result), limit, kind, userID)
 	return result
 }
 
-func shuffleNotes(notes []FeedNote) {
-	rand.Shuffle(len(notes), func(i, j int) {
-		notes[i], notes[j] = notes[j], notes[i]
-	})
-}
-
 func generateFeedVariants(authorFeed, viralFeed []FeedNote, variantSize int, kind int) [][]FeedNote {
-	// Filter author feed and viral feed by the specified kind
 	var filteredAuthorFeed []FeedNote
 	var filteredViralFeed []FeedNote
 
@@ -251,7 +242,7 @@ func (r *NostrRepository) GetUserFeedByAuthors(ctx context.Context, userID strin
 	var FeedNotes []FeedNote
 	for _, note := range notes {
 		interactionCount := getInteractionCountForAuthor(note.Event.PubKey, authorInteractions)
-		score := r.calculateAuthorNoteScore(note, interactionCount)
+		score := r.calculateAuthorNoteScore(note, interactionCount, userID)
 		FeedNotes = append(FeedNotes, FeedNote{Event: note.Event, Score: score})
 	}
 
@@ -272,22 +263,60 @@ func getInteractionCountForAuthor(authorID string, interactions []AuthorInteract
 	return 0
 }
 
-func (r *NostrRepository) calculateAuthorNoteScore(event EventWithMeta, interactionCount int) float64 {
-	recencyFactor := calculateRecencyFactor(event.CreatedAt)
+func (r *NostrRepository) calculateAuthorNoteScore(event EventWithMeta, interactionCount int, userID string) float64 {
+	// Get user settings
+	userSettings, err := r.GetUserSettings(userID)
 
-	score := float64(event.GlobalCommentsCount)*weightCommentsGlobal +
-		float64(event.GlobalReactionsCount)*weightReactionsGlobal +
-		float64(event.GlobalZapsCount)*weightZapsGlobal +
-		recencyFactor*weightRecency +
-		float64(interactionCount)*weightInteractionsWithAuthor
+	// Use user-specific weights if available, otherwise fall back to global weights
+	authorInteractionsWeight := weightInteractionsWithAuthor
+	commentsWeight := weightCommentsGlobal
+	reactionsWeight := weightReactionsGlobal
+	zapsWeight := weightZapsGlobal
+	recencyWeight := weightRecency
+	decayRateValue := decayRate
+
+	if err == nil {
+		// User has custom settings, use them
+		authorInteractionsWeight = userSettings.AuthorInteractions
+		commentsWeight = userSettings.GlobalComments
+		reactionsWeight = userSettings.GlobalReactions
+		zapsWeight = userSettings.GlobalZaps
+		recencyWeight = userSettings.Recency
+		decayRateValue = userSettings.DecayRate
+	}
+
+	// Calculate recency factor with potentially user-specific decay rate
+	recencyFactor := calculateRecencyFactorWithDecay(event.CreatedAt, decayRateValue)
+
+	// Calculate score using user-specific weights
+	score := float64(event.GlobalCommentsCount)*commentsWeight +
+		float64(event.GlobalReactionsCount)*reactionsWeight +
+		float64(event.GlobalZapsCount)*zapsWeight +
+		recencyFactor*recencyWeight +
+		float64(interactionCount)*authorInteractionsWeight
 
 	return score
 }
 
-func calculateRecencyFactor(createdAt time.Time) float64 {
+// invalidateUserFeedCache removes all cached feeds for a user
+func invalidateUserFeedCache(userID string) {
+	log.Printf("Invalidating feed cache for user: %s", userID)
+
+	// We need to remove all kinds of feeds for this user
+	// Common kinds are 1 (text notes), 30023 (articles), 20 (images)
+	commonKinds := []int{1, 30023, 20}
+
+	for _, kind := range commonKinds {
+		cacheKey := getCacheKey(userID, kind)
+		userFeedCache.Delete(cacheKey)
+	}
+}
+
+// New function to calculate recency with custom decay rate
+func calculateRecencyFactorWithDecay(createdAt time.Time, decayRateValue float64) float64 {
 	hoursSinceCreation := time.Since(createdAt).Hours()
 	scalingFactor := 100.0
-	recencyFactor := math.Exp(-decayRate*hoursSinceCreation) * scalingFactor
+	recencyFactor := math.Exp(-decayRateValue*hoursSinceCreation) * scalingFactor
 
 	if recencyFactor > 1.0 {
 		recencyFactor = 1.0
